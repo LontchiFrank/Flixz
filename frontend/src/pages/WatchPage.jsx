@@ -255,8 +255,17 @@ const WatchPage = () => {
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
-  const changeSource = (source) => {
+  const tryNextSource = () => {
+    const nextIndex = (currentSourceIndex + 1) % (STREAMING_SOURCES.length - 1); // Skip "Trailer Only"
+    setCurrentSourceIndex(nextIndex);
+    setSelectedSource(STREAMING_SOURCES[nextIndex]);
+    setSourceError(false);
+    toast.info(`Trying ${STREAMING_SOURCES[nextIndex].name}...`);
+  };
+
+  const changeSource = (source, index) => {
     setSelectedSource(source);
+    setCurrentSourceIndex(index !== undefined ? index : STREAMING_SOURCES.findIndex(s => s.id === source.id));
     setShowSourcePicker(false);
     toast.success(`Switched to ${source.name}`);
   };
