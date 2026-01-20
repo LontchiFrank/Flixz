@@ -680,6 +680,207 @@ async def chat_message(sid, data):
         'timestamp': datetime.now(timezone.utc).isoformat()
     }, room=room_id)
 
+# ==================== WEBRTC SIGNALING ====================
+
+# Store peer connections per room
+peer_connections: Dict[str, Dict[str, dict]] = {}
+
+@sio.event
+async def webrtc_join(sid, data):
+    """User joins video call in a room"""
+    room_id = data.get('room_id')
+    user_id = data.get('user_id')
+    user_name = data.get('user_name', 'Anonymous')
+    
+    if room_id not in peer_connections:
+        peer_connections[room_id] = {}
+    
+    # Store user info
+    peer_connections[room_id][sid] = {
+        'user_id': user_id,
+        'user_name': user_name
+    }
+    
+    # Notify existing peers about new user
+    existing_peers = [
+        {'sid': peer_sid, **peer_info}
+        for peer_sid, peer_info in peer_connections[room_id].items()
+        if peer_sid != sid
+    ]
+    
+    # Send existing peers to the new user
+    await sio.emit('webrtc_peers', {'peers': existing_peers}, to=sid)
+    
+    # Notify others about new peer
+    await sio.emit('webrtc_peer_joined', {
+        'sid': sid,
+        'user_id': user_id,
+        'user_name': user_name
+    }, room=room_id, skip_sid=sid)
+    
+    logger.info(f"WebRTC: {user_name} joined video in room {room_id}")
+
+@sio.event
+async def webrtc_leave(sid, data):
+    """User leaves video call"""
+    room_id = data.get('room_id')
+    
+    if room_id in peer_connections and sid in peer_connections[room_id]:
+        user_info = peer_connections[room_id].pop(sid)
+        await sio.emit('webrtc_peer_left', {'sid': sid}, room=room_id)
+        logger.info(f"WebRTC: {user_info.get('user_name')} left video in room {room_id}")
+
+@sio.event
+async def webrtc_offer(sid, data):
+    """Relay WebRTC offer to target peer"""
+    target_sid = data.get('target')
+    offer = data.get('offer')
+    
+    await sio.emit('webrtc_offer', {
+        'from': sid,
+        'offer': offer
+    }, to=target_sid)
+
+@sio.event
+async def webrtc_answer(sid, data):
+    """Relay WebRTC answer to target peer"""
+    target_sid = data.get('target')
+    answer = data.get('answer')
+    
+    await sio.emit('webrtc_answer', {
+        'from': sid,
+        'answer': answer
+    }, to=target_sid)
+
+@sio.event
+async def webrtc_ice_candidate(sid, data):
+    """Relay ICE candidate to target peer"""
+    target_sid = data.get('target')
+    candidate = data.get('candidate')
+    
+    await sio.emit('webrtc_ice_candidate', {
+        'from': sid,
+        'candidate': candidate
+    }, to=target_sid)
+
+@sio.event
+async def webrtc_toggle_media(sid, data):
+    """Notify others about media toggle (mute/unmute)"""
+    room_id = data.get('room_id')
+    media_type = data.get('type')  # 'audio' or 'video'
+    enabled = data.get('enabled')
+    
+    await sio.emit('webrtc_media_toggle', {
+        'sid': sid,
+        'type': media_type,
+        'enabled': enabled
+    }, room=room_id, skip_sid=sid)
+
+# ==================== USER PROFILE ====================
+
+class UserProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+@api_router.get("/user/profile")
+async def get_user_profile(user: dict = Depends(get_current_user)):
+    profile = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0, "password": 0})
+    if not profile:
+        raise HTTPException(status_code=404, detail="User not found")
+    return profile
+
+@api_router.put("/user/profile")
+async def update_user_profile(updates: UserProfileUpdate, user: dict = Depends(get_current_user)):
+    update_data = {k: v for k, v in updates.model_dump().items() if v is not None}
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No updates provided")
+    
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": update_data}
+    )
+    return {"message": "Profile updated"}
+
+@api_router.get("/user/stats")
+async def get_user_stats(user: dict = Depends(get_current_user)):
+    my_list_count = await db.my_list.count_documents({"user_id": user["user_id"]})
+    continue_watching_count = await db.continue_watching.count_documents({"user_id": user["user_id"]})
+    watch_parties_hosted = await db.watch_parties.count_documents({"host_id": user["user_id"]})
+    
+    return {
+        "my_list_count": my_list_count,
+        "continue_watching_count": continue_watching_count,
+        "watch_parties_hosted": watch_parties_hosted
+    }
+
+# ==================== NOTIFICATIONS ====================
+
+class NotificationCreate(BaseModel):
+    recipient_id: str
+    type: str
+    title: str
+    message: str
+    data: Optional[dict] = None
+
+@api_router.get("/notifications")
+async def get_notifications(user: dict = Depends(get_current_user)):
+    notifications = await db.notifications.find(
+        {"recipient_id": user["user_id"]},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(50)
+    return {"notifications": notifications}
+
+@api_router.post("/notifications/invite")
+async def send_watch_party_invite(
+    room_id: str,
+    invitee_email: str,
+    user: dict = Depends(get_current_user)
+):
+    # Find invitee
+    invitee = await db.users.find_one({"email": invitee_email}, {"_id": 0})
+    if not invitee:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Get party details
+    party = await db.watch_parties.find_one({"room_id": room_id}, {"_id": 0})
+    if not party:
+        raise HTTPException(status_code=404, detail="Watch party not found")
+    
+    # Create notification
+    notification = {
+        "notification_id": f"notif_{uuid.uuid4().hex[:12]}",
+        "recipient_id": invitee["user_id"],
+        "type": "watch_party_invite",
+        "title": "Watch Party Invitation",
+        "message": f"{user['name']} invited you to watch '{party['name']}'",
+        "data": {
+            "room_id": room_id,
+            "inviter_name": user["name"],
+            "party_name": party["name"]
+        },
+        "read": False,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    await db.notifications.insert_one(notification)
+    return {"message": "Invitation sent"}
+
+@api_router.put("/notifications/{notification_id}/read")
+async def mark_notification_read(notification_id: str, user: dict = Depends(get_current_user)):
+    await db.notifications.update_one(
+        {"notification_id": notification_id, "recipient_id": user["user_id"]},
+        {"$set": {"read": True}}
+    )
+    return {"message": "Marked as read"}
+
+@api_router.delete("/notifications/{notification_id}")
+async def delete_notification(notification_id: str, user: dict = Depends(get_current_user)):
+    await db.notifications.delete_one({
+        "notification_id": notification_id,
+        "recipient_id": user["user_id"]
+    })
+    return {"message": "Notification deleted"}
+
 # ==================== HEALTH CHECK ====================
 
 @api_router.get("/health")
