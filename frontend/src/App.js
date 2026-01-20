@@ -14,6 +14,7 @@ import SearchPage from "./pages/SearchPage";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import ProfilePage from "./pages/ProfilePage";
+import CustomContentPage from "./pages/CustomContentPage";
 
 // Components
 import Sidebar from "./components/layout/Sidebar";
