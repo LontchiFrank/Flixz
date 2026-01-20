@@ -150,16 +150,29 @@ const WatchPage = () => {
     }
     
     if (type === "tv") {
-      // For TV shows, include season and episode
-      const baseUrl = selectedSource.getUrl(type, id);
-      if (selectedSource.id === "vidsrc") {
-        return `https://vidsrc.xyz/embed/tv/${id}/${season}/${episode}`;
-      } else if (selectedSource.id === "vidsrc2") {
-        return `https://vidsrc.to/embed/tv/${id}/${season}/${episode}`;
-      } else if (selectedSource.id === "autoembed") {
-        return `https://autoembed.co/tv/tmdb/${id}-${season}-${episode}`;
+      // For TV shows, include season and episode based on source
+      switch (selectedSource.id) {
+        case "vidsrcicu":
+          return `https://vidsrc.icu/embed/tv/${id}/${season}/${episode}`;
+        case "vidsrcnl":
+          return `https://player.vidsrc.nl/embed/tv/${id}/${season}/${episode}`;
+        case "vidsrccc":
+          return `https://vidsrc.cc/v2/embed/tv/${id}/${season}/${episode}`;
+        case "superembed":
+          return `https://multiembed.mov/?video_id=${id}&tmdb=1&s=${season}&e=${episode}`;
+        case "embedsu":
+          return `https://embed.su/embed/tv/${id}/${season}/${episode}`;
+        case "smashystream":
+          return `https://player.smashy.stream/tv/${id}?s=${season}&e=${episode}`;
+        case "moviesapi":
+          return `https://moviesapi.club/tv/${id}/${season}/${episode}`;
+        case "vidsrcpro":
+          return `https://vidsrc.pro/embed/tv/${id}/${season}/${episode}`;
+        case "2embed":
+          return `https://www.2embed.cc/embedtv/${id}&s=${season}&e=${episode}`;
+        default:
+          return selectedSource.getUrl(type, id);
       }
-      return baseUrl;
     }
     
     return selectedSource.getUrl(type, id);
