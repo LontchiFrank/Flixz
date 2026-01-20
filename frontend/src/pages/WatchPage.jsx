@@ -25,10 +25,11 @@ const IMAGE_BASE = "https://image.tmdb.org/t/p/";
 
 // Streaming sources for embedded players
 const STREAMING_SOURCES = [
+  { id: "vidsrcpro", name: "VidSrc Pro", getUrl: (type, id) => `https://vidsrc.pro/embed/${type}/${id}` },
+  { id: "embedsu", name: "Embed.su", getUrl: (type, id) => `https://embed.su/embed/${type}/${id}` },
+  { id: "multiembed", name: "MultiEmbed", getUrl: (type, id) => `https://multiembed.mov/directstream.php?video_id=${id}&tmdb=1` },
   { id: "vidsrc", name: "VidSrc", getUrl: (type, id) => `https://vidsrc.xyz/embed/${type}/${id}` },
-  { id: "vidsrc2", name: "VidSrc 2", getUrl: (type, id) => `https://vidsrc.to/embed/${type}/${id}` },
   { id: "2embed", name: "2Embed", getUrl: (type, id) => `https://www.2embed.cc/embed/${id}` },
-  { id: "autoembed", name: "AutoEmbed", getUrl: (type, id) => `https://autoembed.co/${type}/tmdb/${id}` },
   { id: "trailer", name: "Trailer Only", getUrl: () => null },
 ];
 
