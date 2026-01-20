@@ -13,6 +13,7 @@ import MyListPage from "./pages/MyListPage";
 import SearchPage from "./pages/SearchPage";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
+import ProfilePage from "./pages/ProfilePage";
 
 // Components
 import Sidebar from "./components/layout/Sidebar";
