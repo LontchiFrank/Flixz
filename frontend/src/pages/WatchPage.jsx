@@ -380,6 +380,14 @@ const WatchPage = () => {
               {/* Source Selector */}
               <div className="flex items-center gap-2">
                 <button
+                  onClick={tryNextSource}
+                  data-testid="try-next-source-btn"
+                  className="flex items-center gap-2 px-4 py-2 rounded-full bg-[#7C3AED]/20 text-[#7C3AED] hover:bg-[#7C3AED]/30 transition-all"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  <span className="text-sm">Try Next</span>
+                </button>
+                <button
                   onClick={() => setShowSourcePicker(!showSourcePicker)}
                   data-testid="source-picker-btn"
                   className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/10 backdrop-blur-md hover:bg-white/20 transition-all"
@@ -393,12 +401,13 @@ const WatchPage = () => {
 
           {/* Source Picker Dropdown */}
           {showSourcePicker && (
-            <div className="absolute top-20 right-6 bg-[#0A0A0A] border border-white/10 rounded-xl p-2 z-50 pointer-events-auto">
-              <p className="text-xs text-[#A1A1AA] px-3 py-2">Select Source</p>
-              {STREAMING_SOURCES.map((source) => (
+            <div className="absolute top-20 right-6 bg-[#0A0A0A] border border-white/10 rounded-xl p-2 z-50 pointer-events-auto min-w-[200px]">
+              <p className="text-xs text-[#A1A1AA] px-3 py-2">Select Streaming Source</p>
+              <p className="text-xs text-[#52525B] px-3 pb-2">If one doesn't work, try another</p>
+              {STREAMING_SOURCES.map((source, index) => (
                 <button
                   key={source.id}
-                  onClick={() => changeSource(source)}
+                  onClick={() => changeSource(source, index)}
                   data-testid={`source-${source.id}`}
                   className={`w-full text-left px-4 py-2 rounded-lg transition-all flex items-center gap-2 ${
                     selectedSource.id === source.id
@@ -412,6 +421,11 @@ const WatchPage = () => {
                     <Monitor className="w-4 h-4" />
                   )}
                   {source.name}
+                  {index < 3 && source.id !== "trailer" && (
+                    <span className="ml-auto text-xs bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded">
+                      Popular
+                    </span>
+                  )}
                 </button>
               ))}
             </div>
