@@ -865,7 +865,18 @@ const WatchPartyPage = () => {
 
         {/* Video Player Section */}
         <div className={`flex-1 relative bg-black ${isVideoFullscreen ? 'fixed inset-0 z-50' : ''}`}>
-          {trailerKey ? (
+          {/* Embedded Streaming Player (default) */}
+          {showEmbeddedPlayer ? (
+            <iframe
+              src={streamingUrl}
+              className="w-full h-full min-h-[400px]"
+              allowFullScreen
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+              referrerPolicy="origin"
+              sandbox="allow-forms allow-pointer-lock allow-same-origin allow-scripts allow-top-navigation"
+            />
+          ) : trailerKey && selectedSource.id === "trailer" ? (
+            // YouTube Trailer (fallback)
             <iframe
               src={`https://www.youtube.com/embed/${trailerKey}?autoplay=0&controls=1`}
               className="w-full h-full min-h-[400px]"
@@ -873,29 +884,30 @@ const WatchPartyPage = () => {
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
             />
           ) : (
+            // Backdrop with instructions
             <div className="w-full h-full min-h-[400px] flex items-center justify-center">
               {movieDetails?.backdrop_path && (
                 <img
                   src={`${IMAGE_BASE}original${movieDetails.backdrop_path}`}
                   alt={title}
-                  className="absolute inset-0 w-full h-full object-cover opacity-50"
+                  className="absolute inset-0 w-full h-full object-cover opacity-30"
                 />
               )}
-              <div className="relative text-center">
-                <button
-                  onClick={togglePlayback}
-                  data-testid="play-pause-btn"
-                  className="w-20 h-20 rounded-full bg-[#7C3AED] flex items-center justify-center hover:bg-[#8B5CF6] transition-all neon-glow mb-4 mx-auto"
-                >
-                  {isPlaying ? (
-                    <Pause className="w-10 h-10" />
-                  ) : (
-                    <Play className="w-10 h-10 ml-1" />
-                  )}
-                </button>
-                <p className="text-[#A1A1AA]">
-                  {isPlaying ? "Playing" : "Paused"} • Synced with room
+              <div className="relative text-center p-6">
+                <div className="w-20 h-20 rounded-full bg-[#7C3AED]/20 flex items-center justify-center mb-4 mx-auto">
+                  <Film className="w-10 h-10 text-[#7C3AED]" />
+                </div>
+                <h3 className="text-xl font-bold mb-2">Select a Streaming Source</h3>
+                <p className="text-[#A1A1AA] mb-4 max-w-md">
+                  Click the source picker above to choose a streaming source, or click "Try Next" to automatically cycle through sources.
                 </p>
+                <button
+                  onClick={tryNextSource}
+                  className="btn-primary flex items-center gap-2 mx-auto"
+                >
+                  <RefreshCw className="w-5 h-5" />
+                  Try First Source
+                </button>
               </div>
             </div>
           )}
@@ -903,7 +915,7 @@ const WatchPartyPage = () => {
           {/* Fullscreen toggle */}
           <button
             onClick={() => setIsVideoFullscreen(!isVideoFullscreen)}
-            className="absolute top-4 right-4 w-10 h-10 rounded-full bg-black/50 flex items-center justify-center hover:bg-black/70 transition-all"
+            className="absolute top-4 right-4 w-10 h-10 rounded-full bg-black/50 flex items-center justify-center hover:bg-black/70 transition-all z-10"
           >
             {isVideoFullscreen ? (
               <Minimize2 className="w-5 h-5" />
@@ -911,6 +923,12 @@ const WatchPartyPage = () => {
               <Maximize2 className="w-5 h-5" />
             )}
           </button>
+          
+          {/* Current source indicator */}
+          <div className="absolute bottom-4 left-4 px-3 py-1.5 rounded-full bg-black/70 backdrop-blur-sm text-sm flex items-center gap-2 z-10">
+            <Server className="w-4 h-4 text-[#7C3AED]" />
+            {selectedSource.name}
+          </div>
         </div>
 
         {/* Video Call Section */}
