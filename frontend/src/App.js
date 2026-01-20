@@ -135,6 +135,14 @@ const AppRouter = () => {
             }
           />
           <Route
+            path="/profile"
+            element={
+              <ProtectedRoute>
+                <ProfilePage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
             path="/watch-party"
             element={
               <ProtectedRoute>
