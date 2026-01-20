@@ -1,0 +1,186 @@
+{
+  "identity": {
+    "name": "Flixz",
+    "persona": "E1: The Anti-AI Designer",
+    "tone": "Cinematic, Immersive, Social, Electric",
+    "archetype": "Jewel & Luxury mixed with Electric & Neon"
+  },
+  "typography": {
+    "headings": {
+      "font_family": "Outfit, sans-serif",
+      "weights": ["600", "700", "800"],
+      "usage": "Main titles, Movie names, Section headers",
+      "letter_spacing": "tracking-tight"
+    },
+    "body": {
+      "font_family": "DM Sans, sans-serif",
+      "weights": ["400", "500"],
+      "usage": "Descriptions, UI text, Chat",
+      "letter_spacing": "tracking-normal"
+    },
+    "mono": {
+      "font_family": "JetBrains Mono, monospace",
+      "usage": "Timecodes, Tech specs, Room IDs"
+    }
+  },
+  "colors": {
+    "palette": {
+      "background": {
+        "default": "#050505",
+        "paper": "#0A0A0A",
+        "subtle": "#121212"
+      },
+      "primary": {
+        "main": "#7C3AED",
+        "light": "#8B5CF6",
+        "dark": "#6D28D9",
+        "glow": "0 0 20px rgba(124, 58, 237, 0.5)"
+      },
+      "secondary": {
+        "main": "#06B6D4",
+        "contrast": "#FFFFFF"
+      },
+      "status": {
+        "success": "#10B981",
+        "error": "#EF4444",
+        "warning": "#F59E0B"
+      },
+      "text": {
+        "primary": "#FFFFFF",
+        "secondary": "#A1A1AA",
+        "muted": "#52525B"
+      }
+    },
+    "gradients": {
+      "hero_overlay": "linear-gradient(to top, #050505 0%, transparent 100%)",
+      "purple_haze": "radial-gradient(circle at center, rgba(124, 58, 237, 0.15) 0%, transparent 70%)",
+      "glass_surface": "linear-gradient(145deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.01) 100%)"
+    }
+  },
+  "visual_enhancers": {
+    "glassmorphism": {
+      "default": "backdrop-blur-xl bg-black/40 border border-white/10",
+      "heavy": "backdrop-blur-2xl bg-black/60 border border-white/5",
+      "interactive": "hover:bg-white/5 transition-colors duration-300"
+    },
+    "shadows": {
+      "neon": "0 0 10px rgba(124, 58, 237, 0.3), 0 0 20px rgba(124, 58, 237, 0.1)",
+      "card": "0 10px 30px -10px rgba(0,0,0,0.5)"
+    },
+    "borders": {
+      "subtle": "1px solid rgba(255,255,255,0.08)",
+      "highlight": "1px solid rgba(124, 58, 237, 0.5)"
+    },
+    "radius": {
+      "card": "rounded-xl",
+      "button": "rounded-full",
+      "panel": "rounded-2xl"
+    }
+  },
+  "layout_strategies": {
+    "spacing_scale": ["p-1", "p-2", "p-4", "p-6", "p-8", "p-12", "p-16", "p-24", "p-32"],
+    "grids": {
+      "bento_marketing": "grid grid-cols-1 md:grid-cols-8 lg:grid-cols-12 gap-6",
+      "movie_grid": "grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6",
+      "watch_party": "grid grid-cols-1 lg:grid-cols-[1fr_350px] h-screen overflow-hidden"
+    },
+    "containers": {
+      "max_width": "max-w-7xl mx-auto px-6 md:px-12",
+      "full_bleed": "w-full"
+    }
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-primary text-white hover:bg-primary/90 shadow-neon rounded-full px-8 py-3 font-medium transition-all hover:scale-105 active:scale-95",
+      "secondary": "bg-white/10 text-white hover:bg-white/20 backdrop-blur-md border border-white/10 rounded-full px-6 py-2 transition-all",
+      "ghost": "text-gray-400 hover:text-white hover:bg-white/5 rounded-lg px-4 py-2"
+    },
+    "cards": {
+      "movie_poster": "relative group overflow-hidden rounded-xl aspect-[2/3] transition-transform duration-300 hover:z-10 hover:scale-105 hover:shadow-2xl border border-white/5",
+      "glass_panel": "bg-black/40 backdrop-blur-xl border border-white/10 rounded-2xl p-6"
+    },
+    "inputs": {
+      "search": "bg-black/50 border border-white/10 rounded-full px-6 py-3 text-white placeholder:text-gray-500 focus:border-primary/50 focus:ring-1 focus:ring-primary/50 transition-all w-full backdrop-blur-sm"
+    },
+    "navigation": {
+      "sidebar": "fixed left-0 top-0 h-full w-20 bg-black/90 border-r border-white/5 flex flex-col items-center py-8 z-50 backdrop-blur-xl",
+      "topbar": "fixed top-0 left-0 w-full h-16 bg-gradient-to-b from-black/80 to-transparent z-40 flex items-center px-8 backdrop-blur-sm"
+    }
+  },
+  "motion": {
+    "transitions": {
+      "default": "transition-all duration-300 ease-out",
+      "slow": "transition-all duration-700 ease-in-out"
+    },
+    "animations": {
+      "fade_in": "animate-in fade-in duration-500",
+      "slide_up": "animate-in slide-in-from-bottom-4 duration-500",
+      "scale_in": "animate-in zoom-in-95 duration-300"
+    },
+    "libraries": ["framer-motion"]
+  },
+  "image_assets": {
+    "backgrounds": [
+      {
+        "url": "https://images.unsplash.com/photo-1766153550988-121007d31002?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3MjQyMTd8MHwxfHNlYXJjaHwxfHxjaW5lbWF0aWMlMjBhYnN0cmFjdCUyMGRhcmslMjBiYWNrZ3JvdW5kJTIwdGV4dHVyZXxlbnwwfHx8fDE3Njg5MTYzMTB8MA&ixlib=rb-4.1.0&q=85",
+        "category": "hero_bg",
+        "description": "Golden light flares on dark background for cinematic hero sections"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1759911706620-a685c003aa3b?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3MjQyMTd8MHwxfHNlYXJjaHwyfHxjaW5lbWF0aWMlMjBhYnN0cmFjdCUyMGRhcmslMjBiYWNrZ3JvdW5kJTIwdGV4dHVyZXxlbnwwfHx8fDE3Njg5MTYzMTB8MA&ixlib=rb-4.1.0&q=85",
+        "category": "auth_bg",
+        "description": "Red glowing eye abstract for login/signup background"
+      }
+    ],
+    "avatars": [
+      {
+        "url": "https://images.unsplash.com/photo-1740252117027-4275d3f84385?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Njd8MHwxfHNlYXJjaHwxfHxjb29sJTIwdXNlciUyMGF2YXRhciUyMHBvcnRyYWl0fGVufDB8fHx8MTc2ODkxNjMxMnww&ixlib=rb-4.1.0&q=85",
+        "category": "user_avatar",
+        "description": "3D avatar with sunglasses"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1615843423179-bea071facf96?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Njd8MHwxfHNlYXJjaHwyfHxjb29sJTIwdXNlciUyMGF2YXRhciUyMHBvcnRyYWl0fGVufDB8fHx8MTc2ODkxNjMxMnww&ixlib=rb-4.1.0&q=85",
+        "category": "user_avatar",
+        "description": "Person in mask"
+      }
+    ]
+  },
+  "instructions_to_main_agent": {
+    "general": [
+      "Implement the 'Anti-AI' aesthetic: Avoid generic centered layouts.",
+      "Use the 'Tetris' grid for the dashboard home page.",
+      "Ensure all interactive elements have hover states with 'text-white' and 'scale-105'.",
+      "Use 'sonner' for all toast notifications.",
+      "Strictly follow the color palette. Do NOT use default Tailwind colors like 'bg-slate-900'. Use the custom hex codes provided.",
+      "For the Watch Party, use a split-screen layout. Video player takes priority.",
+      "Use 'framer-motion' for the 3D carousel effect in the hero section."
+    ],
+    "files_to_create": [
+      "src/components/ui/glass-card.jsx",
+      "src/components/ui/neon-button.jsx",
+      "src/components/layout/sidebar.jsx",
+      "src/pages/watch-party.jsx"
+    ],
+    "libraries_to_install": [
+      "framer-motion",
+      "lucide-react",
+      "clsx",
+      "tailwind-merge",
+      "sonner"
+    ]
+  },
+  "universal_guidelines": {
+    "do_not": [
+      "Do NOT use 'Inter' font for headings.",
+      "Do NOT use purple gradients on white backgrounds.",
+      "Do NOT center everything.",
+      "Do NOT use generic 'Lorem Ipsum'. Use cinematic placeholder text."
+    ],
+    "must_do": [
+      "MUST use 'data-testid' for all interactive elements.",
+      "MUST ensure contrast ratios are accessible (WCAG AA).",
+      "MUST use 'backdrop-blur' for overlays.",
+      "MUST implement responsive design (Mobile First)."
+    ]
+  }
+}
