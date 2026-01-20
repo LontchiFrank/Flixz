@@ -2,10 +2,11 @@ import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { motion, AnimatePresence } from "framer-motion";
-import { Play, Plus, Star, ChevronLeft, ChevronRight, Search, Info } from "lucide-react";
+import { Play, Plus, Star, ChevronLeft, ChevronRight, Search, Info, Clock } from "lucide-react";
 import { toast } from "sonner";
 import MovieCard from "../components/MovieCard";
 import MovieRow from "../components/MovieRow";
+import ContinueWatchingRow from "../components/ContinueWatchingRow";
 import { useAuth } from "../context/AuthContext";
 import { API } from "../App";
 
@@ -19,6 +20,7 @@ const HomePage = () => {
   const [nowPlaying, setNowPlaying] = useState([]);
   const [topRated, setTopRated] = useState([]);
   const [trendingTv, setTrendingTv] = useState([]);
+  const [continueWatching, setContinueWatching] = useState([]);
   const [currentSlide, setCurrentSlide] = useState(0);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -26,7 +28,10 @@ const HomePage = () => {
 
   useEffect(() => {
     fetchData();
-  }, []);
+    if (user) {
+      fetchContinueWatching();
+    }
+  }, [user]);
 
   useEffect(() => {
     if (trending.length > 0) {
@@ -36,6 +41,17 @@ const HomePage = () => {
     }
     return () => clearInterval(carouselInterval.current);
   }, [trending]);
+
+  const fetchContinueWatching = async () => {
+    try {
+      const res = await axios.get(`${API}/continue-watching`, {
+        headers: getAuthHeaders(),
+      });
+      setContinueWatching(res.data.items || []);
+    } catch (error) {
+      console.error("Failed to fetch continue watching:", error);
+    }
+  };
 
   const fetchData = async () => {
     try {
