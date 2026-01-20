@@ -73,7 +73,11 @@ const Sidebar = () => {
       <div className="mt-auto flex flex-col gap-4">
         {user ? (
           <>
-            <div className="group relative flex items-center justify-center w-12 h-12 rounded-xl overflow-hidden border border-white/10">
+            <NavLink
+              to="/profile"
+              data-testid="profile-btn"
+              className="group relative flex items-center justify-center w-12 h-12 rounded-xl overflow-hidden border border-white/10 hover:border-[#7C3AED] transition-all"
+            >
               {user.picture ? (
                 <img
                   src={user.picture}
@@ -88,7 +92,7 @@ const Sidebar = () => {
               <span className="absolute left-16 px-3 py-1.5 rounded-lg bg-black/90 text-white text-sm whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none border border-white/10">
                 {user.name}
               </span>
-            </div>
+            </NavLink>
             <button
               onClick={handleLogout}
               data-testid="logout-btn"
