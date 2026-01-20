@@ -59,6 +59,8 @@ const WatchPage = () => {
   const [showSourcePicker, setShowSourcePicker] = useState(false);
   const [season, setSeason] = useState(1);
   const [episode, setEpisode] = useState(1);
+  const [sourceError, setSourceError] = useState(false);
+  const [currentSourceIndex, setCurrentSourceIndex] = useState(0);
   
   const videoRef = useRef(null);
   const controlsTimeout = useRef(null);
@@ -72,6 +74,11 @@ const WatchPage = () => {
       fetchDetails();
     }
   }, [id, type, isCustomContent]);
+
+  // Reset error state when source changes
+  useEffect(() => {
+    setSourceError(false);
+  }, [selectedSource]);
 
   useEffect(() => {
     // Save progress periodically
