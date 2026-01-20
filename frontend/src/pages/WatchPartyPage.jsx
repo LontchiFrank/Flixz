@@ -98,6 +98,11 @@ const WatchPartyPage = () => {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
   
+  // Streaming source state
+  const [selectedSource, setSelectedSource] = useState(STREAMING_SOURCES[0]);
+  const [showSourcePicker, setShowSourcePicker] = useState(false);
+  const [currentSourceIndex, setCurrentSourceIndex] = useState(0);
+  
   // Refs
   const socketRef = useRef(null);
   const chatRef = useRef(null);
