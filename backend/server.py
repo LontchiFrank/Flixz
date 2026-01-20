@@ -887,6 +887,182 @@ async def delete_notification(notification_id: str, user: dict = Depends(get_cur
     })
     return {"message": "Notification deleted"}
 
+# ==================== CUSTOM CONTENT ====================
+
+class CustomContentCreate(BaseModel):
+    title: str
+    description: Optional[str] = None
+    media_type: str = "movie"  # movie or tv
+    genre: Optional[str] = None
+    year: Optional[int] = None
+    poster_url: Optional[str] = None
+    backdrop_url: Optional[str] = None
+
+class CustomContentResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    content_id: str
+    title: str
+    description: Optional[str] = None
+    media_type: str
+    genre: Optional[str] = None
+    year: Optional[int] = None
+    poster_url: Optional[str] = None
+    backdrop_url: Optional[str] = None
+    video_url: Optional[str] = None
+    uploaded_by: str
+    created_at: datetime
+
+@api_router.post("/custom-content/upload")
+async def upload_custom_content(
+    title: str = Form(...),
+    description: str = Form(None),
+    media_type: str = Form("movie"),
+    genre: str = Form(None),
+    year: int = Form(None),
+    video: UploadFile = File(...),
+    poster: UploadFile = File(None),
+    user: dict = Depends(get_current_user)
+):
+    """Upload custom video content"""
+    content_id = f"custom_{uuid.uuid4().hex[:12]}"
+    
+    # Validate video file
+    allowed_video_types = ["video/mp4", "video/webm", "video/quicktime", "video/x-msvideo"]
+    if video.content_type not in allowed_video_types:
+        raise HTTPException(status_code=400, detail="Invalid video format. Allowed: MP4, WebM, MOV, AVI")
+    
+    # Create content directory
+    content_dir = UPLOADS_DIR / content_id
+    content_dir.mkdir(exist_ok=True)
+    
+    # Save video file
+    video_filename = f"video_{uuid.uuid4().hex[:8]}{Path(video.filename).suffix}"
+    video_path = content_dir / video_filename
+    
+    with open(video_path, "wb") as buffer:
+        shutil.copyfileobj(video.file, buffer)
+    
+    video_url = f"/api/uploads/{content_id}/{video_filename}"
+    
+    # Save poster if provided
+    poster_url = None
+    if poster:
+        poster_filename = f"poster_{uuid.uuid4().hex[:8]}{Path(poster.filename).suffix}"
+        poster_path = content_dir / poster_filename
+        with open(poster_path, "wb") as buffer:
+            shutil.copyfileobj(poster.file, buffer)
+        poster_url = f"/api/uploads/{content_id}/{poster_filename}"
+    
+    # Save to database
+    content_doc = {
+        "content_id": content_id,
+        "title": title,
+        "description": description,
+        "media_type": media_type,
+        "genre": genre,
+        "year": year,
+        "poster_url": poster_url,
+        "backdrop_url": poster_url,  # Use poster as backdrop too
+        "video_url": video_url,
+        "uploaded_by": user["user_id"],
+        "uploader_name": user["name"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "views": 0
+    }
+    
+    await db.custom_content.insert_one(content_doc)
+    
+    return {
+        "message": "Content uploaded successfully",
+        "content_id": content_id,
+        "video_url": video_url,
+        "poster_url": poster_url
+    }
+
+@api_router.get("/custom-content")
+async def list_custom_content(page: int = 1, limit: int = 20):
+    """List all custom content"""
+    skip = (page - 1) * limit
+    
+    content = await db.custom_content.find(
+        {},
+        {"_id": 0}
+    ).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+    
+    total = await db.custom_content.count_documents({})
+    
+    return {
+        "results": content,
+        "total": total,
+        "page": page,
+        "total_pages": (total + limit - 1) // limit
+    }
+
+@api_router.get("/custom-content/{content_id}")
+async def get_custom_content(content_id: str):
+    """Get custom content details"""
+    content = await db.custom_content.find_one(
+        {"content_id": content_id},
+        {"_id": 0}
+    )
+    
+    if not content:
+        raise HTTPException(status_code=404, detail="Content not found")
+    
+    # Increment views
+    await db.custom_content.update_one(
+        {"content_id": content_id},
+        {"$inc": {"views": 1}}
+    )
+    
+    return content
+
+@api_router.delete("/custom-content/{content_id}")
+async def delete_custom_content(content_id: str, user: dict = Depends(get_current_user)):
+    """Delete custom content (only owner can delete)"""
+    content = await db.custom_content.find_one({"content_id": content_id})
+    
+    if not content:
+        raise HTTPException(status_code=404, detail="Content not found")
+    
+    if content["uploaded_by"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this content")
+    
+    # Delete files
+    content_dir = UPLOADS_DIR / content_id
+    if content_dir.exists():
+        shutil.rmtree(content_dir)
+    
+    # Delete from database
+    await db.custom_content.delete_one({"content_id": content_id})
+    
+    return {"message": "Content deleted"}
+
+@api_router.get("/uploads/{content_id}/{filename}")
+async def serve_upload(content_id: str, filename: str):
+    """Serve uploaded files"""
+    file_path = UPLOADS_DIR / content_id / filename
+    
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    # Determine media type
+    suffix = file_path.suffix.lower()
+    media_types = {
+        ".mp4": "video/mp4",
+        ".webm": "video/webm",
+        ".mov": "video/quicktime",
+        ".avi": "video/x-msvideo",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+    }
+    
+    media_type = media_types.get(suffix, "application/octet-stream")
+    
+    return FileResponse(file_path, media_type=media_type)
+
 # ==================== HEALTH CHECK ====================
 
 @api_router.get("/health")
