@@ -17,18 +17,23 @@ import {
   Tv,
   Server,
   RefreshCw,
+  AlertCircle,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { API } from "../App";
 
 const IMAGE_BASE = "https://image.tmdb.org/t/p/";
 
-// Streaming sources for embedded players
+// Streaming sources for embedded players - ordered by reliability
 const STREAMING_SOURCES = [
-  { id: "vidsrcpro", name: "VidSrc Pro", getUrl: (type, id) => `https://vidsrc.pro/embed/${type}/${id}` },
+  { id: "vidsrcicu", name: "VidSrc ICU", getUrl: (type, id) => `https://vidsrc.icu/embed/${type}/${id}` },
+  { id: "vidsrcnl", name: "VidSrc NL", getUrl: (type, id) => `https://player.vidsrc.nl/embed/${type}/${id}` },
+  { id: "vidsrccc", name: "VidSrc CC", getUrl: (type, id) => `https://vidsrc.cc/v2/embed/${type}/${id}` },
+  { id: "superembed", name: "SuperEmbed", getUrl: (type, id) => `https://multiembed.mov/?video_id=${id}&tmdb=1` },
   { id: "embedsu", name: "Embed.su", getUrl: (type, id) => `https://embed.su/embed/${type}/${id}` },
-  { id: "multiembed", name: "MultiEmbed", getUrl: (type, id) => `https://multiembed.mov/directstream.php?video_id=${id}&tmdb=1` },
-  { id: "vidsrc", name: "VidSrc", getUrl: (type, id) => `https://vidsrc.xyz/embed/${type}/${id}` },
+  { id: "smashystream", name: "Smashy", getUrl: (type, id) => `https://player.smashy.stream/${type}/${id}` },
+  { id: "moviesapi", name: "MoviesAPI", getUrl: (type, id) => `https://moviesapi.club/${type}/${id}` },
+  { id: "vidsrcpro", name: "VidSrc Pro", getUrl: (type, id) => `https://vidsrc.pro/embed/${type}/${id}` },
   { id: "2embed", name: "2Embed", getUrl: (type, id) => `https://www.2embed.cc/embed/${id}` },
   { id: "trailer", name: "Trailer Only", getUrl: () => null },
 ];
