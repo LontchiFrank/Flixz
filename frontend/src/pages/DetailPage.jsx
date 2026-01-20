@@ -39,7 +39,9 @@ const DetailPage = ({ type }) => {
   const fetchDetails = async () => {
     setLoading(true);
     try {
-      const res = await axios.get(`${API}/${type}/${id}`);
+      // Use plural endpoint (movies/tv)
+      const endpoint = type === "movie" ? "movies" : "tv";
+      const res = await axios.get(`${API}/${endpoint}/${id}`);
       setDetails(res.data);
     } catch (error) {
       console.error("Failed to fetch details:", error);
