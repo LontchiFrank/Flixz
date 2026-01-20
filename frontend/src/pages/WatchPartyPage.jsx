@@ -872,8 +872,6 @@ const WatchPartyPage = () => {
               className="w-full h-full min-h-[400px]"
               allowFullScreen
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-              referrerPolicy="origin"
-              sandbox="allow-forms allow-pointer-lock allow-same-origin allow-scripts allow-top-navigation"
             />
           ) : trailerKey && selectedSource.id === "trailer" ? (
             // YouTube Trailer (fallback)
