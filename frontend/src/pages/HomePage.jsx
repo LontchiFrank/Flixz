@@ -351,6 +351,11 @@ const HomePage = () => {
 
       {/* Movie Rows */}
       <div className="max-w-7xl mx-auto px-6 md:px-12 mt-16 space-y-12">
+        {/* Continue Watching - only show if user is logged in and has items */}
+        {user && continueWatching.length > 0 && (
+          <ContinueWatchingRow items={continueWatching} />
+        )}
+        
         <MovieRow
           title="Trending Now"
           movies={trending}
