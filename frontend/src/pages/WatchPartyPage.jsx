@@ -510,6 +510,51 @@ const WatchPartyPage = () => {
     return trailer?.key;
   };
 
+  const getStreamingUrl = () => {
+    if (selectedSource.id === "trailer") {
+      return null; // Will show trailer
+    }
+    
+    const mediaType = currentParty?.media_type || "movie";
+    const movieId = currentParty?.movie_id;
+    
+    if (!movieId) return null;
+    
+    return selectedSource.getUrl(mediaType, movieId);
+  };
+
+  const tryNextSource = () => {
+    const nextIndex = (currentSourceIndex + 1) % (STREAMING_SOURCES.length - 1); // Skip "Trailer Only"
+    setCurrentSourceIndex(nextIndex);
+    setSelectedSource(STREAMING_SOURCES[nextIndex]);
+    
+    // Sync source change with other participants
+    socketRef.current?.emit("sync_playback", {
+      room_id: roomId,
+      is_playing: isPlaying,
+      current_time: currentTime,
+      source: STREAMING_SOURCES[nextIndex].id,
+    });
+    
+    toast.info(`Trying ${STREAMING_SOURCES[nextIndex].name}...`);
+  };
+
+  const changeSource = (source, index) => {
+    setSelectedSource(source);
+    setCurrentSourceIndex(index !== undefined ? index : STREAMING_SOURCES.findIndex(s => s.id === source.id));
+    setShowSourcePicker(false);
+    
+    // Sync source change with other participants
+    socketRef.current?.emit("sync_playback", {
+      room_id: roomId,
+      is_playing: isPlaying,
+      current_time: currentTime,
+      source: source.id,
+    });
+    
+    toast.success(`Switched to ${source.name}`);
+  };
+
   // List view
   if (!roomId) {
     return (
