@@ -144,6 +144,14 @@ const AppRouter = () => {
             }
           />
           <Route
+            path="/my-uploads"
+            element={
+              <ProtectedRoute>
+                <CustomContentPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
             path="/watch-party"
             element={
               <ProtectedRoute>
