@@ -38,8 +38,9 @@ JWT_EXPIRATION_HOURS = 24 * 7
 
 # TMDB Config
 TMDB_API_KEY = os.environ.get('TMDB_API_KEY')
-TMDB_BASE_URL = "https://api.themoviedb.org/3"
+TMDB_BASE_URL = "https://api.themoviedb.org/3/authentication"
 IMAGE_BASE_URL = "https://image.tmdb.org/t/p/"
+
 
 # Cache for TMDB requests
 cache: Dict[str, Dict[str, Any]] = {}
