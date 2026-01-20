@@ -300,8 +300,6 @@ const WatchPage = () => {
             className="w-full h-full"
             allowFullScreen
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-            referrerPolicy="origin"
-            sandbox="allow-forms allow-pointer-lock allow-same-origin allow-scripts allow-top-navigation"
           />
         ) : isCustomContent && customVideoUrl ? (
           // Custom video player for uploaded content
