@@ -718,8 +718,10 @@ const WatchPartyPage = () => {
   }
 
   const trailerKey = getTrailerUrl();
+  const streamingUrl = getStreamingUrl();
   const title = movieDetails?.title || movieDetails?.name;
   const remoteStreamEntries = Object.entries(remoteStreams);
+  const showEmbeddedPlayer = streamingUrl && selectedSource.id !== "trailer";
 
   return (
     <div
@@ -744,20 +746,71 @@ const WatchPartyPage = () => {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {/* Source Selector */}
+            <button
+              onClick={tryNextSource}
+              data-testid="try-next-source-btn"
+              className="flex items-center gap-2 px-3 py-2 rounded-full bg-[#7C3AED]/20 text-[#7C3AED] hover:bg-[#7C3AED]/30 transition-all"
+            >
+              <RefreshCw className="w-4 h-4" />
+              <span className="text-sm hidden md:inline">Try Next</span>
+            </button>
+            <div className="relative">
+              <button
+                onClick={() => setShowSourcePicker(!showSourcePicker)}
+                data-testid="source-picker-btn"
+                className="flex items-center gap-2 px-3 py-2 rounded-full bg-white/10 hover:bg-white/20 transition-all"
+              >
+                <Server className="w-4 h-4" />
+                <span className="text-sm hidden md:inline">{selectedSource.name}</span>
+              </button>
+              
+              {/* Source Picker Dropdown */}
+              {showSourcePicker && (
+                <div className="absolute right-0 top-full mt-2 bg-[#0A0A0A] border border-white/10 rounded-xl p-2 z-50 min-w-[200px]">
+                  <p className="text-xs text-[#A1A1AA] px-3 py-2">Select Streaming Source</p>
+                  {STREAMING_SOURCES.map((source, index) => (
+                    <button
+                      key={source.id}
+                      onClick={() => changeSource(source, index)}
+                      data-testid={`source-${source.id}`}
+                      className={`w-full text-left px-4 py-2 rounded-lg transition-all flex items-center gap-2 ${
+                        selectedSource.id === source.id
+                          ? "bg-[#7C3AED] text-white"
+                          : "hover:bg-white/5"
+                      }`}
+                    >
+                      {source.id === "trailer" ? (
+                        <Film className="w-4 h-4" />
+                      ) : (
+                        <Monitor className="w-4 h-4" />
+                      )}
+                      {source.name}
+                      {index < 3 && source.id !== "trailer" && (
+                        <span className="ml-auto text-xs bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded">
+                          Popular
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            
             <button
               onClick={copyRoomLink}
               data-testid="copy-link-btn"
               className="btn-secondary flex items-center gap-2"
             >
               <Link2 className="w-4 h-4" />
-              Copy Link
+              <span className="hidden md:inline">Copy Link</span>
             </button>
             
             {/* Share dropdown */}
             <div className="relative group">
               <button className="btn-secondary flex items-center gap-2">
                 <Share2 className="w-4 h-4" />
-                Share
+                <span className="hidden md:inline">Share</span>
               </button>
               <div className="absolute right-0 top-full mt-2 bg-[#0A0A0A] border border-white/10 rounded-lg p-2 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 min-w-[150px]">
                 <button
