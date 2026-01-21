@@ -22,7 +22,6 @@ import { useAuth } from "../context/AuthContext";
 import { API } from "../App";
 
 const IMAGE_BASE = "https://image.tmdb.org/t/p/";
-
 const HomePage = () => {
 	const navigate = useNavigate();
 	const { user, getAuthHeaders } = useAuth();
@@ -57,7 +56,7 @@ const HomePage = () => {
 		try {
 			const res = await axios.get(`${API}/continue-watching`, {
 				headers: getAuthHeaders(),
-				withCredentials: true
+				withCredentials: true,
 			});
 			setContinueWatching(res.data.items || []);
 		} catch (error) {
@@ -115,7 +114,7 @@ const HomePage = () => {
 				},
 				{
 					headers: getAuthHeaders(),
-					withCredentials: true
+					withCredentials: true,
 				}
 			);
 			toast.success("Added to My List");
