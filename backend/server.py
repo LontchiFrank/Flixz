@@ -851,17 +851,23 @@ async def send_watch_party_invite(
     invitee_email: str,
     user: dict = Depends(get_current_user)
 ):
-    # Find invitee
-    invitee = await db.users.find_one({"email": invitee_email}, {"_id": 0})
-    if not invitee:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Get party details
+    # Get party details first
     party = await db.watch_parties.find_one({"room_id": room_id}, {"_id": 0})
     if not party:
         raise HTTPException(status_code=404, detail="Watch party not found")
-    
-    # Create notification
+
+    # Find invitee
+    invitee = await db.users.find_one({"email": invitee_email}, {"_id": 0})
+
+    if not invitee:
+        # User doesn't exist - return success but indicate they need to share link
+        return {
+            "status": "pending",
+            "message": f"User with email '{invitee_email}' is not registered yet. Please share the watch party link with them directly!",
+            "user_exists": False
+        }
+
+    # Create notification for existing user
     notification = {
         "notification_id": f"notif_{uuid.uuid4().hex[:12]}",
         "recipient_id": invitee["user_id"],

@@ -508,7 +508,7 @@ const WatchPartyPage = () => {
     }
 
     try {
-      await axios.post(
+      const response = await axios.post(
         `${API}/notifications/invite?room_id=${roomId}&invitee_email=${encodeURIComponent(inviteEmail)}`,
         {},
         {
@@ -516,10 +516,20 @@ const WatchPartyPage = () => {
           withCredentials: true
         }
       );
-      toast.success("Invitation sent!");
+
+      // Handle different response types
+      if (response.data.status === "pending" || !response.data.user_exists) {
+        // User doesn't exist - show info message
+        toast.info(response.data.message || "User not registered. Share the link with them!");
+      } else {
+        // User exists - notification sent
+        toast.success("Invitation sent!");
+      }
+
       setInviteEmail("");
       setInviteDialogOpen(false);
     } catch (error) {
+      console.error("Invite error:", error);
       toast.error(error.response?.data?.detail || "Failed to send invitation");
     }
   };
@@ -869,10 +879,16 @@ const WatchPartyPage = () => {
                   <DialogTitle>Invite Friends</DialogTitle>
                 </DialogHeader>
                 <div className="space-y-4 mt-4">
+                  <div className="bg-[#7C3AED]/10 border border-[#7C3AED]/20 rounded-lg p-3">
+                    <p className="text-sm text-[#A1A1AA]">
+                      💡 <span className="text-white">Tip:</span> If your friend has a Flixzbox account, they'll receive a notification. Otherwise, use the <span className="text-[#7C3AED]">Copy Link</span> button to share directly!
+                    </p>
+                  </div>
                   <Input
                     placeholder="Enter friend's email..."
                     value={inviteEmail}
                     onChange={(e) => setInviteEmail(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && sendInvite()}
                     data-testid="invite-email-input"
                     className="bg-black/50 border-white/10"
                   />
