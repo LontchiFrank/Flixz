@@ -41,17 +41,16 @@ import {
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const IMAGE_BASE = "https://image.tmdb.org/t/p/";
 
-// Streaming sources for embedded players - same as WatchPage
+// Streaming sources for embedded players - ordered by reliability and minimal ads
 const STREAMING_SOURCES = [
-  { id: "vidsrcicu", name: "VidSrc ICU", getUrl: (type, id) => `https://vidsrc.icu/embed/${type}/${id}` },
-  { id: "vidsrcnl", name: "VidSrc NL", getUrl: (type, id) => `https://player.vidsrc.nl/embed/${type}/${id}` },
-  { id: "vidsrccc", name: "VidSrc CC", getUrl: (type, id) => `https://vidsrc.cc/v2/embed/${type}/${id}` },
-  { id: "superembed", name: "SuperEmbed", getUrl: (type, id) => `https://multiembed.mov/?video_id=${id}&tmdb=1` },
-  { id: "embedsu", name: "Embed.su", getUrl: (type, id) => `https://embed.su/embed/${type}/${id}` },
-  { id: "smashystream", name: "Smashy", getUrl: (type, id) => `https://player.smashy.stream/${type}/${id}` },
-  { id: "moviesapi", name: "MoviesAPI", getUrl: (type, id) => `https://moviesapi.club/${type}/${id}` },
+  { id: "vidsrcxyz", name: "VidSrc XYZ", getUrl: (type, id) => `https://vidsrc.xyz/embed/${type}/${id}` },
+  { id: "vidsrcto", name: "VidSrc TO", getUrl: (type, id) => `https://vidsrc.to/embed/${type}/${id}` },
+  { id: "vidsrcme", name: "VidSrc ME", getUrl: (type, id) => `https://vidsrc.me/embed/${type}/${id}` },
   { id: "vidsrcpro", name: "VidSrc Pro", getUrl: (type, id) => `https://vidsrc.pro/embed/${type}/${id}` },
-  { id: "2embed", name: "2Embed", getUrl: (type, id) => `https://www.2embed.cc/embed/${id}` },
+  { id: "embedsu", name: "Embed.su", getUrl: (type, id) => `https://embed.su/embed/${type}/${id}` },
+  { id: "autoembed", name: "AutoEmbed", getUrl: (type, id) => `https://player.autoembed.cc/embed/${type}/${id}` },
+  { id: "vidsrcnl", name: "VidSrc NL", getUrl: (type, id) => `https://player.vidsrc.nl/embed/${type}/${id}` },
+  { id: "smashystream", name: "Smashy Stream", getUrl: (type, id) => `https://player.smashy.stream/${type}/${id}` },
   { id: "trailer", name: "Trailer Only", getUrl: () => null },
 ];
 
