@@ -38,7 +38,7 @@ JWT_EXPIRATION_HOURS = 24 * 7
 
 # TMDB Config
 TMDB_API_KEY = os.environ.get('TMDB_API_KEY')
-TMDB_BASE_URL = "https://api.themoviedb.org/3/authentication"
+TMDB_BASE_URL = "https://api.themoviedb.org/3"
 IMAGE_BASE_URL = "https://image.tmdb.org/t/p/"
 
 
@@ -126,21 +126,29 @@ async def tmdb_request(endpoint: str, params: dict = None) -> Optional[dict]:
     """Make a cached request to TMDB API"""
     params = params or {}
     cache_key = f"{endpoint}_{json.dumps(params, sort_keys=True)}"
-    
+
     cached = cache.get(cache_key)
     if cached and time.time() - cached["ts"] < CACHE_TTL:
         return cached["data"]
-    
+
     async with httpx.AsyncClient() as client:
         try:
             url = f"{TMDB_BASE_URL}{endpoint}"
-            params["api_key"] = TMDB_API_KEY
-            response = await client.get(url, params=params, timeout=10)
-            
+            # Check if API key is a Bearer token (starts with 'eyJ') or regular API key
+            headers = {}
+            if TMDB_API_KEY and TMDB_API_KEY.startswith('eyJ'):
+                # Bearer token for API v4
+                headers["Authorization"] = f"Bearer {TMDB_API_KEY}"
+            else:
+                # Regular API key for API v3
+                params["api_key"] = TMDB_API_KEY
+
+            response = await client.get(url, params=params, headers=headers, timeout=10)
+
             if response.status_code == 429:
                 await asyncio.sleep(2)
-                response = await client.get(url, params=params, timeout=10)
-            
+                response = await client.get(url, params=params, headers=headers, timeout=10)
+
             response.raise_for_status()
             data = response.json()
             cache[cache_key] = {"data": data, "ts": time.time()}
