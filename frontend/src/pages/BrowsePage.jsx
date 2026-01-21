@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useParams, useSearchParams, useNavigate } from "react-router-dom";
 import axios from "axios";
 import { toast } from "sonner";
@@ -34,12 +34,7 @@ const BrowsePage = () => {
     }
   }, [category]);
 
-  useEffect(() => {
-    fetchContent();
-    fetchGenres();
-  }, [activeCategory, selectedGenre, page]);
-
-  const fetchGenres = async () => {
+  const fetchGenres = useCallback(async () => {
     try {
       const type = activeCategory === "tv" || activeCategory === "series" ? "tv" : "movie";
       const res = await axios.get(`${API}/genres/${type}`);
@@ -47,9 +42,9 @@ const BrowsePage = () => {
     } catch (error) {
       console.error("Failed to fetch genres:", error);
     }
-  };
+  }, [activeCategory]);
 
-  const fetchContent = async () => {
+  const fetchContent = useCallback(async () => {
     setLoading(true);
     try {
       const cat = categories.find((c) => c.id === activeCategory);
@@ -70,7 +65,12 @@ const BrowsePage = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [activeCategory, selectedGenre, page]);
+
+  useEffect(() => {
+    fetchContent();
+    fetchGenres();
+  }, [fetchContent, fetchGenres]);
 
   const addToList = async (movie) => {
     if (!user) {

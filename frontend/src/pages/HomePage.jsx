@@ -1,6 +1,6 @@
 /** @format */
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { motion, AnimatePresence } from "framer-motion";
@@ -36,23 +36,7 @@ const HomePage = () => {
 	const [searchQuery, setSearchQuery] = useState("");
 	const carouselInterval = useRef(null);
 
-	useEffect(() => {
-		fetchData();
-		if (user) {
-			fetchContinueWatching();
-		}
-	}, [user]);
-
-	useEffect(() => {
-		if (trending.length > 0) {
-			carouselInterval.current = setInterval(() => {
-				setCurrentSlide((prev) => (prev + 1) % Math.min(trending.length, 5));
-			}, 6000);
-		}
-		return () => clearInterval(carouselInterval.current);
-	}, [trending]);
-
-	const fetchContinueWatching = async () => {
+	const fetchContinueWatching = useCallback(async () => {
 		try {
 			const res = await axios.get(`${API}/continue-watching`, {
 				headers: getAuthHeaders(),
@@ -62,7 +46,23 @@ const HomePage = () => {
 		} catch (error) {
 			console.error("Failed to fetch continue watching:", error);
 		}
-	};
+	}, [getAuthHeaders]);
+
+	useEffect(() => {
+		fetchData();
+		if (user) {
+			fetchContinueWatching();
+		}
+	}, [user, fetchContinueWatching]);
+
+	useEffect(() => {
+		if (trending.length > 0) {
+			carouselInterval.current = setInterval(() => {
+				setCurrentSlide((prev) => (prev + 1) % Math.min(trending.length, 5));
+			}, 6000);
+		}
+		return () => clearInterval(carouselInterval.current);
+	}, [trending]);
 	console.log(API);
 
 	const fetchData = async () => {

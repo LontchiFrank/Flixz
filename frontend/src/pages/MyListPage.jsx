@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { toast } from "sonner";
@@ -13,11 +13,7 @@ const MyListPage = () => {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    fetchMyList();
-  }, []);
-
-  const fetchMyList = async () => {
+  const fetchMyList = useCallback(async () => {
     setLoading(true);
     try {
       const res = await axios.get(`${API}/my-list`, {
@@ -31,7 +27,11 @@ const MyListPage = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [getAuthHeaders]);
+
+  useEffect(() => {
+    fetchMyList();
+  }, [fetchMyList]);
 
   const removeFromList = async (mediaType, mediaId) => {
     try {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { toast } from "sonner";
@@ -38,18 +38,12 @@ const ProfilePage = () => {
   const [editName, setEditName] = useState(user?.name || "");
   const [notifDialogOpen, setNotifDialogOpen] = useState(false);
 
-  useEffect(() => {
-    if (user) {
-      fetchData();
-    }
-  }, [user]);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
     try {
       const [statsRes, notifRes] = await Promise.all([
-        axios.get(`${API}/user/stats`, { headers: getAuthHeaders() }),
-        axios.get(`${API}/notifications`, { headers: getAuthHeaders() }),
+        axios.get(`${API}/user/stats`, { headers: getAuthHeaders(), withCredentials: true }),
+        axios.get(`${API}/notifications`, { headers: getAuthHeaders(), withCredentials: true }),
       ]);
       setStats(statsRes.data);
       setNotifications(notifRes.data.notifications || []);
@@ -58,7 +52,13 @@ const ProfilePage = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [getAuthHeaders]);
+
+  useEffect(() => {
+    if (user) {
+      fetchData();
+    }
+  }, [user, fetchData]);
 
   const updateProfile = async () => {
     if (!editName.trim()) {

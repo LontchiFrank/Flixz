@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import axios from "axios";
 import { motion } from "framer-motion";
@@ -29,14 +29,7 @@ const DetailPage = ({ type }) => {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("overview");
 
-  useEffect(() => {
-    fetchDetails();
-    if (user) {
-      checkInList();
-    }
-  }, [id, type, user]);
-
-  const fetchDetails = async () => {
+  const fetchDetails = useCallback(async () => {
     setLoading(true);
     try {
       // Use plural endpoint (movies/tv)
@@ -49,18 +42,26 @@ const DetailPage = ({ type }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [id, type]);
 
-  const checkInList = async () => {
+  const checkInList = useCallback(async () => {
     try {
       const res = await axios.get(`${API}/my-list/check/${type}/${id}`, {
         headers: getAuthHeaders(),
+        withCredentials: true
       });
       setInMyList(res.data.in_list);
     } catch (error) {
       console.error("Failed to check list:", error);
     }
-  };
+  }, [type, id, getAuthHeaders]);
+
+  useEffect(() => {
+    fetchDetails();
+    if (user) {
+      checkInList();
+    }
+  }, [id, type, user, fetchDetails, checkInList]);
 
   const toggleMyList = async () => {
     if (!user) {
