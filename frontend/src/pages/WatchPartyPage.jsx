@@ -38,8 +38,10 @@ import {
   DialogTrigger,
 } from "../components/ui/dialog";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "https://flixz.onrender.com";
 const IMAGE_BASE = "https://image.tmdb.org/t/p/";
+
+console.log("WatchParty BACKEND_URL:", BACKEND_URL);
 
 // Streaming sources for embedded players - ordered by reliability and minimal ads
 const STREAMING_SOURCES = [
@@ -237,16 +239,33 @@ const WatchPartyPage = () => {
   }, [roomId, getAuthHeaders, navigate]);
 
   const connectSocket = useCallback(() => {
+    console.log("Connecting to Socket.IO at:", BACKEND_URL);
+
     socketRef.current = io(BACKEND_URL, {
       transports: ["websocket", "polling"],
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
     });
 
     socketRef.current.on("connect", () => {
-      console.log("Connected to socket");
+      console.log("✅ Connected to socket");
       socketRef.current.emit("join_room", {
         room_id: roomId,
         user_name: user?.name || "Anonymous",
       });
+    });
+
+    socketRef.current.on("connect_error", (error) => {
+      console.error("❌ Socket connection error:", error);
+      toast.error("Failed to connect to watch party server");
+    });
+
+    socketRef.current.on("disconnect", (reason) => {
+      console.log("🔌 Disconnected from socket:", reason);
+      if (reason === "io server disconnect") {
+        // Server disconnected, try to reconnect
+        socketRef.current.connect();
+      }
     });
 
     socketRef.current.on("user_joined", (data) => {

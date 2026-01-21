@@ -50,7 +50,15 @@ CACHE_TTL = 60 * 60  # 1 hour
 app = FastAPI(title="Flixz API")
 
 # Socket.IO for Watch Party
-sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
+sio = socketio.AsyncServer(
+    async_mode='asgi',
+    cors_allowed_origins=[
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "https://flixz.onrender.com",
+        "https://flixz-iota.vercel.app"
+    ]
+)
 socket_app = socketio.ASGIApp(sio, app)
 
 # Create a router with the /api prefix
