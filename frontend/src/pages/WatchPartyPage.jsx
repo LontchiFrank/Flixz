@@ -41,8 +41,6 @@ import {
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "https://flixz.onrender.com";
 const IMAGE_BASE = "https://image.tmdb.org/t/p/";
 
-console.log("WatchParty BACKEND_URL:", BACKEND_URL);
-
 // Streaming sources for embedded players - ordered by reliability and minimal ads
 const STREAMING_SOURCES = [
   { id: "vidsrcxyz", name: "VidSrc XYZ", getUrl: (type, id) => `https://vidsrc.xyz/embed/${type}/${id}` },
@@ -240,8 +238,6 @@ const WatchPartyPage = () => {
   }, [roomId, getAuthHeaders, navigate]);
 
   const connectSocket = useCallback(() => {
-    console.log("Connecting to Socket.IO at:", BACKEND_URL);
-
     socketRef.current = io(BACKEND_URL, {
       transports: ["websocket", "polling"],
       reconnectionAttempts: 5,
@@ -249,7 +245,6 @@ const WatchPartyPage = () => {
     });
 
     socketRef.current.on("connect", () => {
-      console.log("✅ Connected to socket");
       socketRef.current.emit("join_room", {
         room_id: roomId,
         user_name: user?.name || "Anonymous",
@@ -257,14 +252,12 @@ const WatchPartyPage = () => {
     });
 
     socketRef.current.on("connect_error", (error) => {
-      console.error("❌ Socket connection error:", error);
+      console.error("Socket connection error:", error);
       toast.error("Failed to connect to watch party server");
     });
 
     socketRef.current.on("disconnect", (reason) => {
-      console.log("🔌 Disconnected from socket:", reason);
       if (reason === "io server disconnect") {
-        // Server disconnected, try to reconnect
         socketRef.current.connect();
       }
     });
@@ -346,8 +339,6 @@ const WatchPartyPage = () => {
   }, [roomId, user, createPeerConnection, handleOffer]);
 
   useEffect(() => {
-    console.log("🔄 Main useEffect - roomId changed:", roomId);
-
     if (roomId) {
       fetchPartyDetails();
       connectSocket();
@@ -356,7 +347,6 @@ const WatchPartyPage = () => {
     }
 
     return () => {
-      console.log("🧹 Cleanup - disconnecting socket and ending call");
       if (socketRef.current) {
         socketRef.current.disconnect();
       }
@@ -374,29 +364,17 @@ const WatchPartyPage = () => {
   // Update local video element when stream changes
   useEffect(() => {
     const videoElement = localVideoRef.current;
-    console.log("🔄 useEffect - localStream changed:", {
-      hasVideoElement: !!videoElement,
-      hasLocalStream: !!localStream,
-      isInCall,
-      streamActive: localStream?.active,
-      videoTracks: localStream?.getVideoTracks().length
-    });
 
     if (videoElement && localStream && isInCall) {
-      console.log("✅ Setting local stream to video element");
-
       // Only set if it's different to avoid interrupting playback
       if (videoElement.srcObject !== localStream) {
         videoElement.srcObject = localStream;
-        console.log("📹 srcObject set, waiting for onLoadedMetadata to play");
-        // Don't call play() here - let onLoadedMetadata handle it
       }
     }
 
     return () => {
       // Only clean up when call ends
       if (videoElement && !isInCall) {
-        console.log("🧹 Cleaning up video element");
         videoElement.srcObject = null;
       }
     };
@@ -404,7 +382,6 @@ const WatchPartyPage = () => {
 
   const startCall = async () => {
     try {
-      console.log("🎥 Requesting camera and microphone access...");
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           width: { ideal: 1280 },
@@ -413,30 +390,8 @@ const WatchPartyPage = () => {
         audio: true,
       });
 
-      console.log("✅ Got media stream:", stream);
-      console.log("📹 Video tracks:", stream.getVideoTracks());
-      console.log("🎤 Audio tracks:", stream.getAudioTracks());
-
-      const videoTrack = stream.getVideoTracks()[0];
-      if (videoTrack) {
-        console.log("📹 Video track settings:", videoTrack.getSettings());
-        console.log("📹 Video track enabled:", videoTrack.enabled);
-      }
-
-      console.log("🎯 About to set localStream and isInCall");
       setLocalStream(stream);
       setIsInCall(true);
-
-      // Force a render by using setTimeout
-      setTimeout(() => {
-        console.log("✅ After setState - isInCall should be true now");
-        console.log("🔍 Current state:", {
-          isInCall: true,
-          hasLocalStream: !!stream,
-          streamId: stream.id,
-          videoTracks: stream.getVideoTracks().length
-        });
-      }, 100);
 
       // Join WebRTC room
       socketRef.current?.emit("webrtc_join", {
@@ -445,7 +400,7 @@ const WatchPartyPage = () => {
         user_name: user?.name,
       });
 
-      toast.success("Joined video call - check bottom-right corner!");
+      toast.success("Joined video call!");
     } catch (error) {
       console.error("❌ Failed to start call:", error);
 
@@ -1017,14 +972,6 @@ const WatchPartyPage = () => {
           </div>
         </div>
 
-        {/* Debug Info */}
-        <div className="fixed top-4 left-4 z-[10000] bg-black/90 text-white p-3 rounded-lg text-xs font-mono border border-[#7C3AED]">
-          <div>isInCall: {String(isInCall)}</div>
-          <div>localStream: {localStream ? '✅ YES' : '❌ NO'}</div>
-          <div>videoTracks: {localStream?.getVideoTracks().length || 0}</div>
-          <div>streamActive: {localStream?.active ? '✅' : '❌'}</div>
-        </div>
-
         {/* Video Player Section */}
         <div ref={videoPlayerRef} className="flex-1 relative bg-black">
           {/* Embedded Streaming Player (default) */}
@@ -1074,10 +1021,7 @@ const WatchPartyPage = () => {
 
           {/* Picture-in-Picture Video Overlay (Your Video) */}
           {isInCall && (
-            <div className="absolute bottom-20 right-4 w-48 h-36 rounded-lg overflow-hidden border-4 border-[#7C3AED] shadow-2xl z-[9999] bg-[#121212]">
-              <div className="absolute top-2 left-2 px-2 py-1 bg-green-500 rounded text-xs font-bold z-10">
-                IN CALL
-              </div>
+            <div className="absolute bottom-20 right-4 w-48 h-36 rounded-lg overflow-hidden border-2 border-[#7C3AED] shadow-2xl z-[9999] bg-[#121212]">
               {localStream ? (
                 <>
                   <video
@@ -1085,17 +1029,16 @@ const WatchPartyPage = () => {
                     muted
                     playsInline
                     controls={false}
-                    className="w-full h-full object-cover bg-red-500"
+                    className="w-full h-full object-cover bg-black"
                     style={{ transform: 'scaleX(-1)' }}
                     onLoadedMetadata={(e) => {
-                      console.log("📹 Video metadata loaded, attempting to play");
                       const videoEl = e.target;
-
-                      // Small delay to ensure stream is fully ready
                       setTimeout(() => {
-                        videoEl.play()
-                          .then(() => console.log("✅ Video playing successfully"))
-                          .catch(err => console.error("❌ Play failed:", err.name, err.message));
+                        videoEl.play().catch(err => {
+                          if (err.name !== 'AbortError') {
+                            console.error("Video play failed:", err.name);
+                          }
+                        });
                       }, 150);
                     }}
                   />
@@ -1111,8 +1054,8 @@ const WatchPartyPage = () => {
                   )}
                 </>
               ) : (
-                <div className="w-full h-full flex items-center justify-center text-sm text-white bg-yellow-500">
-                  LOADING CAMERA...
+                <div className="w-full h-full flex items-center justify-center text-xs text-[#A1A1AA]">
+                  Loading camera...
                 </div>
               )}
             </div>
