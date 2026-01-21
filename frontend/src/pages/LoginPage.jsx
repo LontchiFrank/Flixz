@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useNavigate, Link, useLocation } from "react-router-dom";
 import axios from "axios";
 import { toast } from "sonner";
 import { Mail, Lock, Sparkles, Eye, EyeOff } from "lucide-react";
@@ -10,11 +10,17 @@ import { Input } from "../components/ui/input";
 
 const LoginPage = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { login } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // Check if redirecting to watch party
+  const params = new URLSearchParams(location.search);
+  const redirectPath = params.get('redirect');
+  const isWatchPartyRedirect = redirectPath && redirectPath.includes('/watch-party/');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -28,7 +34,11 @@ const LoginPage = () => {
       const res = await axios.post(`${API}/auth/login`, { email, password });
       login(res.data.user, res.data.access_token);
       toast.success("Welcome back!");
-      navigate("/browse");
+
+      // Redirect to intended destination or browse
+      const params = new URLSearchParams(location.search);
+      const redirectTo = params.get('redirect') || location.state?.from || '/browse';
+      navigate(redirectTo);
     } catch (error) {
       toast.error(error.response?.data?.detail || "Login failed");
     } finally {
@@ -38,7 +48,9 @@ const LoginPage = () => {
 
   const handleGoogleLogin = () => {
     // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
-    const redirectUrl = window.location.origin + "/browse";
+    const params = new URLSearchParams(location.search);
+    const intendedPath = params.get('redirect') || location.state?.from || '/browse';
+    const redirectUrl = window.location.origin + intendedPath;
     window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
   };
 
@@ -59,6 +71,17 @@ const LoginPage = () => {
           <h1 className="text-3xl font-bold">Welcome to Flixzbox</h1>
           <p className="text-[#A1A1AA] mt-2">Sign in to continue</p>
         </div>
+
+        {/* Watch Party Invitation Notice */}
+        {isWatchPartyRedirect && (
+          <div className="mb-4 p-4 rounded-lg bg-[#7C3AED]/10 border border-[#7C3AED]/30">
+            <p className="text-sm text-center">
+              <span className="text-[#7C3AED] font-semibold">🎬 You've been invited to a watch party!</span>
+              <br />
+              <span className="text-[#A1A1AA]">Sign in to join the party</span>
+            </p>
+          </div>
+        )}
 
         {/* Form */}
         <div className="glass rounded-2xl p-8">
