@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import axios from "axios";
 import { toast } from "sonner";
@@ -65,32 +65,7 @@ const WatchPage = () => {
   const controlsTimeout = useRef(null);
   const iframeRef = useRef(null);
 
-  useEffect(() => {
-    if (isCustomContent) {
-      // For custom content, fetch from our backend
-      fetchCustomContent();
-    } else {
-      fetchDetails();
-    }
-  }, [id, type, isCustomContent]);
-
-  // Reset error state when source changes
-  useEffect(() => {
-    setSourceError(false);
-  }, [selectedSource]);
-
-  useEffect(() => {
-    // Save progress periodically
-    const interval = setInterval(() => {
-      if (user && currentTime > 0 && duration > 0) {
-        saveProgress();
-      }
-    }, 30000); // Save every 30 seconds
-
-    return () => clearInterval(interval);
-  }, [user, currentTime, duration]);
-
-  const fetchCustomContent = async () => {
+  const fetchCustomContent = useCallback(async () => {
     try {
       const res = await axios.get(`${API}/custom-content/${id}`);
       setDetails(res.data);
@@ -100,14 +75,14 @@ const WatchPage = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [id]);
 
-  const fetchDetails = async () => {
+  const fetchDetails = useCallback(async () => {
     try {
       const endpoint = type === "movie" ? "movies" : "tv";
       const res = await axios.get(`${API}/${endpoint}/${id}`);
       setDetails(res.data);
-      
+
       // Set initial season/episode for TV shows
       if (type === "tv" && res.data.seasons?.length > 0) {
         const firstSeason = res.data.seasons.find(s => s.season_number > 0);
@@ -121,9 +96,9 @@ const WatchPage = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [type, id]);
 
-  const saveProgress = async () => {
+  const saveProgress = useCallback(async () => {
     if (!user) return;
 
     try {
@@ -139,12 +114,37 @@ const WatchPage = () => {
           season: type === "tv" ? season : null,
           episode: type === "tv" ? episode : null,
         },
-        { headers: getAuthHeaders() }
+        { headers: getAuthHeaders(), withCredentials: true }
       );
     } catch (error) {
       console.error("Failed to save progress:", error);
     }
-  };
+  }, [user, id, type, details, currentTime, duration, season, episode, getAuthHeaders]);
+
+  useEffect(() => {
+    if (isCustomContent) {
+      // For custom content, fetch from our backend
+      fetchCustomContent();
+    } else {
+      fetchDetails();
+    }
+  }, [id, type, isCustomContent, fetchCustomContent, fetchDetails]);
+
+  // Reset error state when source changes
+  useEffect(() => {
+    setSourceError(false);
+  }, [selectedSource]);
+
+  useEffect(() => {
+    // Save progress periodically
+    const interval = setInterval(() => {
+      if (user && currentTime > 0 && duration > 0) {
+        saveProgress();
+      }
+    }, 30000); // Save every 30 seconds
+
+    return () => clearInterval(interval);
+  }, [user, currentTime, duration, saveProgress]);
 
   const getStreamingUrl = () => {
     if (isCustomContent && customVideoUrl) {
@@ -158,24 +158,22 @@ const WatchPage = () => {
     if (type === "tv") {
       // For TV shows, include season and episode based on source
       switch (selectedSource.id) {
-        case "vidsrcicu":
-          return `https://vidsrc.icu/embed/tv/${id}/${season}/${episode}`;
-        case "vidsrcnl":
-          return `https://player.vidsrc.nl/embed/tv/${id}/${season}/${episode}`;
-        case "vidsrccc":
-          return `https://vidsrc.cc/v2/embed/tv/${id}/${season}/${episode}`;
-        case "superembed":
-          return `https://multiembed.mov/?video_id=${id}&tmdb=1&s=${season}&e=${episode}`;
-        case "embedsu":
-          return `https://embed.su/embed/tv/${id}/${season}/${episode}`;
-        case "smashystream":
-          return `https://player.smashy.stream/tv/${id}?s=${season}&e=${episode}`;
-        case "moviesapi":
-          return `https://moviesapi.club/tv/${id}/${season}/${episode}`;
+        case "vidsrcxyz":
+          return `https://vidsrc.xyz/embed/tv/${id}/${season}/${episode}`;
+        case "vidsrcto":
+          return `https://vidsrc.to/embed/tv/${id}/${season}/${episode}`;
+        case "vidsrcme":
+          return `https://vidsrc.me/embed/tv/${id}/${season}/${episode}`;
         case "vidsrcpro":
           return `https://vidsrc.pro/embed/tv/${id}/${season}/${episode}`;
-        case "2embed":
-          return `https://www.2embed.cc/embedtv/${id}&s=${season}&e=${episode}`;
+        case "embedsu":
+          return `https://embed.su/embed/tv/${id}/${season}/${episode}`;
+        case "autoembed":
+          return `https://player.autoembed.cc/embed/tv/${id}/${season}/${episode}`;
+        case "vidsrcnl":
+          return `https://player.vidsrc.nl/embed/tv/${id}/${season}/${episode}`;
+        case "smashystream":
+          return `https://player.smashy.stream/tv/${id}?s=${season}&e=${episode}`;
         default:
           return selectedSource.getUrl(type, id);
       }

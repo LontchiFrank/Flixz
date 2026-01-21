@@ -108,36 +108,135 @@ const WatchPartyPage = () => {
   const localVideoRef = useRef(null);
   const peerConnectionsRef = useRef({});
 
-  useEffect(() => {
-    if (roomId) {
-      fetchPartyDetails();
-      connectSocket();
-    } else {
-      fetchParties();
+  // WebRTC Functions
+  const createPeerConnection = useCallback(async (peerId, createOffer = false) => {
+    const pc = new RTCPeerConnection(RTC_CONFIG);
+    peerConnectionsRef.current[peerId] = pc;
+
+    // Add local tracks
+    if (localStream) {
+      localStream.getTracks().forEach((track) => {
+        pc.addTrack(track, localStream);
+      });
     }
 
-    return () => {
-      if (socketRef.current) {
-        socketRef.current.disconnect();
+    // Handle ICE candidates
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        socketRef.current?.emit("webrtc_ice_candidate", {
+          target: peerId,
+          candidate: event.candidate,
+        });
       }
-      endCall();
     };
-  }, [roomId]);
 
-  useEffect(() => {
-    if (chatRef.current) {
-      chatRef.current.scrollTop = chatRef.current.scrollHeight;
-    }
-  }, [messages]);
+    // Handle remote stream
+    pc.ontrack = (event) => {
+      console.log("Received remote track from:", peerId);
+      setRemoteStreams((prev) => ({
+        ...prev,
+        [peerId]: event.streams[0],
+      }));
+    };
 
-  // Update local video element when stream changes
-  useEffect(() => {
-    if (localVideoRef.current && localStream) {
-      localVideoRef.current.srcObject = localStream;
+    if (createOffer) {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      socketRef.current?.emit("webrtc_offer", {
+        target: peerId,
+        offer: offer,
+      });
     }
+
+    return pc;
   }, [localStream]);
 
-  const connectSocket = () => {
+  const handleOffer = useCallback(async (from, offer) => {
+    let pc = peerConnectionsRef.current[from];
+    if (!pc) {
+      pc = await createPeerConnection(from, false);
+    }
+
+    await pc.setRemoteDescription(new RTCSessionDescription(offer));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+
+    socketRef.current?.emit("webrtc_answer", {
+      target: from,
+      answer: answer,
+    });
+  }, [createPeerConnection]);
+
+  const endCall = useCallback(() => {
+    // Stop local stream
+    if (localStream) {
+      localStream.getTracks().forEach((track) => track.stop());
+      setLocalStream(null);
+    }
+
+    // Close peer connections
+    Object.values(peerConnectionsRef.current).forEach((pc) => pc.close());
+    peerConnectionsRef.current = {};
+
+    // Clear remote streams
+    setRemoteStreams({});
+    setIsInCall(false);
+
+    // Notify server
+    socketRef.current?.emit("webrtc_leave", { room_id: roomId });
+  }, [localStream, roomId]);
+
+  const fetchParties = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await axios.get(`${API}/watch-party`, {
+        headers: getAuthHeaders(),
+        withCredentials: true
+      });
+      setParties(res.data.parties || []);
+    } catch (error) {
+      console.error("Failed to fetch parties:", error);
+      toast.error("Failed to load watch parties");
+    } finally {
+      setLoading(false);
+    }
+  }, [getAuthHeaders]);
+
+  const fetchPartyDetails = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await axios.get(`${API}/watch-party/${roomId}`);
+      setCurrentParty(res.data);
+      setParticipants(res.data.participants || []);
+      setIsPlaying(res.data.is_playing);
+      setCurrentTime(res.data.current_time);
+
+      // Fetch movie details
+      const endpoint = res.data.media_type === "movie" ? "movies" : "tv";
+      const movieRes = await axios.get(
+        `${API}/${endpoint}/${res.data.movie_id}`
+      );
+      setMovieDetails(movieRes.data);
+
+      // Join party
+      await axios.post(
+        `${API}/watch-party/${roomId}/join`,
+        {},
+        {
+          headers: getAuthHeaders(),
+          withCredentials: true
+        }
+      );
+    } catch (error) {
+      console.error("Failed to fetch party:", error);
+      toast.error("Failed to load watch party");
+      navigate("/watch-party");
+    } finally {
+      setLoading(false);
+    }
+  }, [roomId, getAuthHeaders, navigate]);
+
+  const connectSocket = useCallback(() => {
     socketRef.current = io(BACKEND_URL, {
       transports: ["websocket", "polling"],
     });
@@ -224,66 +323,36 @@ const WatchPartyPage = () => {
     socketRef.current.on("disconnect", () => {
       console.log("Disconnected from socket");
     });
-  };
+  }, [roomId, user, createPeerConnection, handleOffer]);
 
-  // WebRTC Functions
-  const createPeerConnection = async (peerId, createOffer = false) => {
-    const pc = new RTCPeerConnection(RTC_CONFIG);
-    peerConnectionsRef.current[peerId] = pc;
-
-    // Add local tracks
-    if (localStream) {
-      localStream.getTracks().forEach((track) => {
-        pc.addTrack(track, localStream);
-      });
+  useEffect(() => {
+    if (roomId) {
+      fetchPartyDetails();
+      connectSocket();
+    } else {
+      fetchParties();
     }
 
-    // Handle ICE candidates
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        socketRef.current?.emit("webrtc_ice_candidate", {
-          target: peerId,
-          candidate: event.candidate,
-        });
+    return () => {
+      if (socketRef.current) {
+        socketRef.current.disconnect();
       }
+      endCall();
     };
+  }, [roomId, fetchParties, fetchPartyDetails, connectSocket, endCall]);
 
-    // Handle remote stream
-    pc.ontrack = (event) => {
-      console.log("Received remote track from:", peerId);
-      setRemoteStreams((prev) => ({
-        ...prev,
-        [peerId]: event.streams[0],
-      }));
-    };
-
-    if (createOffer) {
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      socketRef.current?.emit("webrtc_offer", {
-        target: peerId,
-        offer: offer,
-      });
+  useEffect(() => {
+    if (chatRef.current) {
+      chatRef.current.scrollTop = chatRef.current.scrollHeight;
     }
+  }, [messages]);
 
-    return pc;
-  };
-
-  const handleOffer = async (from, offer) => {
-    let pc = peerConnectionsRef.current[from];
-    if (!pc) {
-      pc = await createPeerConnection(from, false);
+  // Update local video element when stream changes
+  useEffect(() => {
+    if (localVideoRef.current && localStream) {
+      localVideoRef.current.srcObject = localStream;
     }
-
-    await pc.setRemoteDescription(new RTCSessionDescription(offer));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-
-    socketRef.current?.emit("webrtc_answer", {
-      target: from,
-      answer: answer,
-    });
-  };
+  }, [localStream]);
 
   const startCall = async () => {
     try {
@@ -306,25 +375,6 @@ const WatchPartyPage = () => {
       console.error("Failed to start call:", error);
       toast.error("Failed to access camera/microphone");
     }
-  };
-
-  const endCall = () => {
-    // Stop local stream
-    if (localStream) {
-      localStream.getTracks().forEach((track) => track.stop());
-      setLocalStream(null);
-    }
-
-    // Close peer connections
-    Object.values(peerConnectionsRef.current).forEach((pc) => pc.close());
-    peerConnectionsRef.current = {};
-
-    // Clear remote streams
-    setRemoteStreams({});
-    setIsInCall(false);
-
-    // Notify server
-    socketRef.current?.emit("webrtc_leave", { room_id: roomId });
   };
 
   const toggleVideo = () => {
@@ -354,56 +404,6 @@ const WatchPartyPage = () => {
           enabled: audioTrack.enabled,
         });
       }
-    }
-  };
-
-  const fetchParties = async () => {
-    setLoading(true);
-    try {
-      const res = await axios.get(`${API}/watch-party`, {
-        headers: getAuthHeaders(),
-        withCredentials: true
-      });
-      setParties(res.data.parties || []);
-    } catch (error) {
-      console.error("Failed to fetch parties:", error);
-      toast.error("Failed to load watch parties");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchPartyDetails = async () => {
-    setLoading(true);
-    try {
-      const res = await axios.get(`${API}/watch-party/${roomId}`);
-      setCurrentParty(res.data);
-      setParticipants(res.data.participants || []);
-      setIsPlaying(res.data.is_playing);
-      setCurrentTime(res.data.current_time);
-
-      // Fetch movie details
-      const endpoint = res.data.media_type === "movie" ? "movies" : "tv";
-      const movieRes = await axios.get(
-        `${API}/${endpoint}/${res.data.movie_id}`
-      );
-      setMovieDetails(movieRes.data);
-
-      // Join party
-      await axios.post(
-        `${API}/watch-party/${roomId}/join`,
-        {},
-        {
-          headers: getAuthHeaders(),
-          withCredentials: true
-        }
-      );
-    } catch (error) {
-      console.error("Failed to fetch party:", error);
-      toast.error("Failed to load watch party");
-      navigate("/watch-party");
-    } finally {
-      setLoading(false);
     }
   };
 
