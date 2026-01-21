@@ -384,28 +384,14 @@ const WatchPartyPage = () => {
       // Only set if it's different to avoid interrupting playback
       if (videoElement.srcObject !== localStream) {
         videoElement.srcObject = localStream;
-
-        // Wait a bit for the stream to be ready, then play
-        setTimeout(() => {
-          if (videoElement.srcObject === localStream && !videoElement.paused) {
-            // Already playing, do nothing
-            console.log("📹 Video already playing");
-            return;
-          }
-
-          videoElement.play().catch(err => {
-            // Ignore AbortError as it just means another play() was called
-            if (err.name !== 'AbortError') {
-              console.error("❌ Error playing local video:", err.name, err.message);
-            }
-          });
-        }, 100);
+        console.log("📹 srcObject set, waiting for onLoadedMetadata to play");
+        // Don't call play() here - let onLoadedMetadata handle it
       }
     }
 
     return () => {
-      // Don't clean up on every re-render, only when truly unmounting
-      if (videoElement && !localStream) {
+      // Only clean up when call ends
+      if (videoElement && !isInCall) {
         console.log("🧹 Cleaning up video element");
         videoElement.srcObject = null;
       }
@@ -1070,7 +1056,6 @@ const WatchPartyPage = () => {
                 <>
                   <video
                     ref={localVideoRef}
-                    autoPlay
                     muted
                     playsInline
                     controls={false}
@@ -1078,11 +1063,14 @@ const WatchPartyPage = () => {
                     style={{ transform: 'scaleX(-1)' }}
                     onLoadedMetadata={(e) => {
                       console.log("📹 Video metadata loaded, attempting to play");
-                      e.target.play().catch(err => {
-                        if (err.name !== 'AbortError') {
-                          console.error("❌ Play on metadata load failed:", err);
-                        }
-                      });
+                      const videoEl = e.target;
+
+                      // Small delay to ensure stream is fully ready
+                      setTimeout(() => {
+                        videoEl.play()
+                          .then(() => console.log("✅ Video playing successfully"))
+                          .catch(err => console.error("❌ Play failed:", err.name, err.message));
+                      }, 150);
                     }}
                   />
                   <div className="absolute top-2 left-2 px-2 py-1 bg-black/80 rounded text-xs font-medium">
