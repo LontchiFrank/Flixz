@@ -109,6 +109,7 @@ const WatchPartyPage = () => {
   const chatRef = useRef(null);
   const localVideoRef = useRef(null);
   const peerConnectionsRef = useRef({});
+  const videoPlayerRef = useRef(null);
 
   // WebRTC Functions
   const createPeerConnection = useCallback(async (peerId, createOffer = false) => {
@@ -368,13 +369,26 @@ const WatchPartyPage = () => {
 
   // Update local video element when stream changes
   useEffect(() => {
-    if (localVideoRef.current && localStream) {
-      localVideoRef.current.srcObject = localStream;
+    const videoElement = localVideoRef.current;
+    if (videoElement && localStream) {
+      console.log("Setting local stream to video element");
+      videoElement.srcObject = localStream;
+
       // Ensure video plays
-      localVideoRef.current.play().catch(err => {
-        console.error("Error playing video:", err);
+      videoElement.play().catch(err => {
+        console.error("Error playing local video:", err);
+        // Try again after a short delay
+        setTimeout(() => {
+          videoElement.play().catch(e => console.error("Retry failed:", e));
+        }, 100);
       });
     }
+
+    return () => {
+      if (videoElement) {
+        videoElement.srcObject = null;
+      }
+    };
   }, [localStream]);
 
   const startCall = async () => {
@@ -448,6 +462,37 @@ const WatchPartyPage = () => {
       }
     }
   };
+
+  const toggleFullscreen = async () => {
+    if (!videoPlayerRef.current) return;
+
+    try {
+      if (!document.fullscreenElement) {
+        // Enter fullscreen
+        await videoPlayerRef.current.requestFullscreen();
+        setIsVideoFullscreen(true);
+      } else {
+        // Exit fullscreen
+        await document.exitFullscreen();
+        setIsVideoFullscreen(false);
+      }
+    } catch (error) {
+      console.error("Fullscreen error:", error);
+      toast.error("Failed to toggle fullscreen");
+    }
+  };
+
+  // Listen for fullscreen changes
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsVideoFullscreen(!!document.fullscreenElement);
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, []);
 
   const searchMovies = async () => {
     if (!searchQuery.trim()) return;
@@ -944,7 +989,7 @@ const WatchPartyPage = () => {
         </div>
 
         {/* Video Player Section */}
-        <div className={`flex-1 relative bg-black ${isVideoFullscreen ? 'fixed inset-0 z-50' : ''}`}>
+        <div ref={videoPlayerRef} className="flex-1 relative bg-black">
           {/* Embedded Streaming Player (default) */}
           {showEmbeddedPlayer ? (
             <iframe
@@ -992,8 +1037,9 @@ const WatchPartyPage = () => {
 
           {/* Fullscreen toggle */}
           <button
-            onClick={() => setIsVideoFullscreen(!isVideoFullscreen)}
+            onClick={toggleFullscreen}
             className="absolute top-4 right-4 w-10 h-10 rounded-full bg-black/50 flex items-center justify-center hover:bg-black/70 transition-all z-10"
+            title={isVideoFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
           >
             {isVideoFullscreen ? (
               <Minimize2 className="w-5 h-5" />
@@ -1021,7 +1067,8 @@ const WatchPartyPage = () => {
                   autoPlay
                   muted
                   playsInline
-                  className="w-full h-full object-cover"
+                  className="w-full h-full object-cover mirror"
+                  style={{ transform: 'scaleX(-1)' }}
                 />
                 <div className="absolute bottom-2 left-2 px-2 py-1 bg-black/70 rounded text-xs">
                   You {!isVideoEnabled && "(Video Off)"}
