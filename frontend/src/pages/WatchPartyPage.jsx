@@ -370,30 +370,39 @@ const WatchPartyPage = () => {
   // Update local video element when stream changes
   useEffect(() => {
     const videoElement = localVideoRef.current;
+    console.log("🔄 useEffect - localStream changed:", {
+      hasVideoElement: !!videoElement,
+      hasLocalStream: !!localStream,
+      isInCall,
+      streamActive: localStream?.active,
+      videoTracks: localStream?.getVideoTracks().length
+    });
+
     if (videoElement && localStream) {
-      console.log("Setting local stream to video element");
+      console.log("✅ Setting local stream to video element");
       videoElement.srcObject = localStream;
 
       // Ensure video plays
       videoElement.play().catch(err => {
-        console.error("Error playing local video:", err);
+        console.error("❌ Error playing local video:", err);
         // Try again after a short delay
         setTimeout(() => {
-          videoElement.play().catch(e => console.error("Retry failed:", e));
+          videoElement.play().catch(e => console.error("❌ Retry failed:", e));
         }, 100);
       });
     }
 
     return () => {
       if (videoElement) {
+        console.log("🧹 Cleaning up video element");
         videoElement.srcObject = null;
       }
     };
-  }, [localStream]);
+  }, [localStream, isInCall]);
 
   const startCall = async () => {
     try {
-      console.log("Requesting camera and microphone access...");
+      console.log("🎥 Requesting camera and microphone access...");
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           width: { ideal: 1280 },
@@ -402,12 +411,19 @@ const WatchPartyPage = () => {
         audio: true,
       });
 
-      console.log("Got media stream:", stream);
-      console.log("Video tracks:", stream.getVideoTracks());
-      console.log("Audio tracks:", stream.getAudioTracks());
+      console.log("✅ Got media stream:", stream);
+      console.log("📹 Video tracks:", stream.getVideoTracks());
+      console.log("🎤 Audio tracks:", stream.getAudioTracks());
+
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack) {
+        console.log("📹 Video track settings:", videoTrack.getSettings());
+        console.log("📹 Video track enabled:", videoTrack.enabled);
+      }
 
       setLocalStream(stream);
       setIsInCall(true);
+      console.log("✅ Set isInCall to true, localStream set");
 
       // Join WebRTC room
       socketRef.current?.emit("webrtc_join", {
@@ -416,9 +432,9 @@ const WatchPartyPage = () => {
         user_name: user?.name,
       });
 
-      toast.success("Joined video call");
+      toast.success("Joined video call - your video should appear!");
     } catch (error) {
-      console.error("Failed to start call:", error);
+      console.error("❌ Failed to start call:", error);
 
       // More detailed error messages
       if (error.name === 'NotAllowedError') {
@@ -1035,6 +1051,67 @@ const WatchPartyPage = () => {
             </div>
           )}
 
+          {/* Picture-in-Picture Video Overlay (Your Video) */}
+          {isInCall && (
+            <div className="absolute bottom-20 right-4 w-48 h-36 rounded-lg overflow-hidden border-2 border-[#7C3AED] shadow-2xl z-20 bg-[#121212]">
+              {localStream ? (
+                <>
+                  <video
+                    ref={localVideoRef}
+                    autoPlay
+                    muted
+                    playsInline
+                    className="w-full h-full object-cover"
+                    style={{ transform: 'scaleX(-1)' }}
+                  />
+                  <div className="absolute top-2 left-2 px-2 py-1 bg-black/80 rounded text-xs font-medium">
+                    You {!isVideoEnabled && "📵"}
+                  </div>
+                  {!isVideoEnabled && (
+                    <div className="absolute inset-0 bg-[#121212] flex items-center justify-center">
+                      <div className="w-12 h-12 rounded-full bg-[#7C3AED] flex items-center justify-center text-xl font-bold">
+                        {user?.name?.charAt(0).toUpperCase()}
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-xs text-[#A1A1AA]">
+                  Loading camera...
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Remote Participant Videos Overlay */}
+          {isInCall && remoteStreamEntries.length > 0 && (
+            <div className="absolute top-20 right-4 space-y-2 z-20">
+              {remoteStreamEntries.slice(0, 3).map(([peerId, stream]) => (
+                <div
+                  key={peerId}
+                  className="w-48 h-36 rounded-lg overflow-hidden border-2 border-white/20 shadow-2xl bg-[#121212]"
+                >
+                  <video
+                    autoPlay
+                    playsInline
+                    ref={(el) => {
+                      if (el) el.srcObject = stream;
+                    }}
+                    className="w-full h-full object-cover"
+                  />
+                  <div className="absolute top-2 left-2 px-2 py-1 bg-black/80 rounded text-xs font-medium">
+                    Participant
+                  </div>
+                </div>
+              ))}
+              {remoteStreamEntries.length > 3 && (
+                <div className="w-48 h-12 rounded-lg bg-black/80 flex items-center justify-center text-sm">
+                  +{remoteStreamEntries.length - 3} more
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Fullscreen toggle */}
           <button
             onClick={toggleFullscreen}
@@ -1047,7 +1124,7 @@ const WatchPartyPage = () => {
               <Maximize2 className="w-5 h-5" />
             )}
           </button>
-          
+
           {/* Current source indicator */}
           <div className="absolute bottom-4 left-4 px-3 py-1.5 rounded-full bg-black/70 backdrop-blur-sm text-sm flex items-center gap-2 z-10">
             <Server className="w-4 h-4 text-[#7C3AED]" />
@@ -1055,55 +1132,8 @@ const WatchPartyPage = () => {
           </div>
         </div>
 
-        {/* Video Call Section */}
+        {/* Video Call Controls Section */}
         <div className="border-t border-white/10">
-          {/* Video Grid */}
-          {isInCall && (
-            <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-4 bg-black/50">
-              {/* Local Video */}
-              <div className="relative aspect-video rounded-lg overflow-hidden bg-[#121212]">
-                <video
-                  ref={localVideoRef}
-                  autoPlay
-                  muted
-                  playsInline
-                  className="w-full h-full object-cover mirror"
-                  style={{ transform: 'scaleX(-1)' }}
-                />
-                <div className="absolute bottom-2 left-2 px-2 py-1 bg-black/70 rounded text-xs">
-                  You {!isVideoEnabled && "(Video Off)"}
-                </div>
-                {!isVideoEnabled && (
-                  <div className="absolute inset-0 bg-[#121212] flex items-center justify-center">
-                    <div className="w-12 h-12 rounded-full bg-[#7C3AED] flex items-center justify-center text-xl font-bold">
-                      {user?.name?.charAt(0).toUpperCase()}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Remote Videos */}
-              {remoteStreamEntries.map(([peerId, stream]) => (
-                <div
-                  key={peerId}
-                  className="relative aspect-video rounded-lg overflow-hidden bg-[#121212]"
-                >
-                  <video
-                    autoPlay
-                    playsInline
-                    ref={(el) => {
-                      if (el) el.srcObject = stream;
-                    }}
-                    className="w-full h-full object-cover"
-                  />
-                  <div className="absolute bottom-2 left-2 px-2 py-1 bg-black/70 rounded text-xs">
-                    Participant
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
           {/* Call Controls */}
           <div className="p-4 flex items-center justify-between">
             <div className="flex items-center gap-2 text-[#A1A1AA]">
