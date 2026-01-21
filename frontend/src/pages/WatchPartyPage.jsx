@@ -206,7 +206,12 @@ const WatchPartyPage = () => {
   const fetchPartyDetails = useCallback(async () => {
     setLoading(true);
     try {
+      console.log("Fetching party details for room:", roomId);
+
+      // Get party details
       const res = await axios.get(`${API}/watch-party/${roomId}`);
+      console.log("Party details:", res.data);
+
       setCurrentParty(res.data);
       setParticipants(res.data.participants || []);
       setIsPlaying(res.data.is_playing);
@@ -214,12 +219,16 @@ const WatchPartyPage = () => {
 
       // Fetch movie details
       const endpoint = res.data.media_type === "movie" ? "movies" : "tv";
+      console.log(`Fetching ${endpoint} details for ID:`, res.data.movie_id);
+
       const movieRes = await axios.get(
         `${API}/${endpoint}/${res.data.movie_id}`
       );
+      console.log("Movie details:", movieRes.data);
       setMovieDetails(movieRes.data);
 
       // Join party
+      console.log("Joining party:", roomId);
       await axios.post(
         `${API}/watch-party/${roomId}/join`,
         {},
@@ -228,9 +237,20 @@ const WatchPartyPage = () => {
           withCredentials: true
         }
       );
+      console.log("Successfully joined party");
+
     } catch (error) {
       console.error("Failed to fetch party:", error);
-      toast.error("Failed to load watch party");
+      console.error("Error details:", error.response?.data);
+
+      if (error.response?.status === 404) {
+        toast.error("Watch party not found. It may have been deleted.");
+      } else if (error.response?.status === 401 || error.response?.status === 403) {
+        toast.error("You don't have permission to join this party");
+      } else {
+        toast.error("Failed to load watch party: " + (error.response?.data?.detail || error.message));
+      }
+
       navigate("/watch-party");
     } finally {
       setLoading(false);
