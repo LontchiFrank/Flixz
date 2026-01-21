@@ -49,13 +49,22 @@ const RegisterPage = () => {
         email,
         password,
       });
-      login(res.data.user, res.data.access_token);
+      const userData = res.data.user;
+      const accessToken = res.data.access_token;
+
+      // Save to auth context and localStorage
+      login(userData, accessToken);
       toast.success("Welcome to Flixzbox!");
 
       // Redirect to intended destination or browse
       const params = new URLSearchParams(location.search);
       const redirectTo = params.get('redirect') || location.state?.from || '/browse';
-      navigate(redirectTo);
+
+      // Pass user in state to prevent ProtectedRoute from re-checking auth
+      navigate(redirectTo, {
+        replace: true,
+        state: { user: userData }
+      });
     } catch (error) {
       toast.error(error.response?.data?.detail || "Registration failed");
     } finally {

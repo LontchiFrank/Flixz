@@ -32,13 +32,22 @@ const LoginPage = () => {
     setLoading(true);
     try {
       const res = await axios.post(`${API}/auth/login`, { email, password });
-      login(res.data.user, res.data.access_token);
+      const userData = res.data.user;
+      const accessToken = res.data.access_token;
+
+      // Save to auth context and localStorage
+      login(userData, accessToken);
       toast.success("Welcome back!");
 
       // Redirect to intended destination or browse
       const params = new URLSearchParams(location.search);
       const redirectTo = params.get('redirect') || location.state?.from || '/browse';
-      navigate(redirectTo);
+
+      // Pass user in state to prevent ProtectedRoute from re-checking auth
+      navigate(redirectTo, {
+        replace: true,
+        state: { user: userData }
+      });
     } catch (error) {
       toast.error(error.response?.data?.detail || "Login failed");
     } finally {

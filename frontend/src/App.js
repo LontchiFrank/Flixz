@@ -98,17 +98,28 @@ const ProtectedRoute = ({ children }) => {
 	const [isChecking, setIsChecking] = useState(true);
 
 	useEffect(() => {
+		// If user passed in navigation state, skip auth check
 		if (location.state?.user) {
+			console.log("ProtectedRoute: User passed in state, skipping auth check");
 			setIsChecking(false);
 			return;
 		}
 
+		// If user already exists in context (from localStorage), skip auth check
+		if (user) {
+			console.log("ProtectedRoute: User exists in context, skipping auth check");
+			setIsChecking(false);
+			return;
+		}
+
+		// Otherwise verify authentication
+		console.log("ProtectedRoute: Verifying authentication...");
 		const verify = async () => {
 			await checkAuth();
 			setIsChecking(false);
 		};
 		verify();
-	}, [checkAuth, location.state]);
+	}, [checkAuth, location.state, user]);
 
 	if (isChecking || loading) {
 		return (
@@ -119,10 +130,12 @@ const ProtectedRoute = ({ children }) => {
 	}
 
 	if (!user) {
+		console.log("ProtectedRoute: No user, redirecting to login");
 		// Redirect to login with intended destination
 		return <Navigate to={`/login?redirect=${encodeURIComponent(location.pathname)}`} replace />;
 	}
 
+	console.log("ProtectedRoute: User authenticated, rendering children");
 	return children;
 };
 
