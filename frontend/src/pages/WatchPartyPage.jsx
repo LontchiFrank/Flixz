@@ -363,10 +363,12 @@ const WatchPartyPage = () => {
     try {
       const res = await axios.get(`${API}/watch-party`, {
         headers: getAuthHeaders(),
+        withCredentials: true
       });
       setParties(res.data.parties || []);
     } catch (error) {
       console.error("Failed to fetch parties:", error);
+      toast.error("Failed to load watch parties");
     } finally {
       setLoading(false);
     }
@@ -392,7 +394,10 @@ const WatchPartyPage = () => {
       await axios.post(
         `${API}/watch-party/${roomId}/join`,
         {},
-        { headers: getAuthHeaders() }
+        {
+          headers: getAuthHeaders(),
+          withCredentials: true
+        }
       );
     } catch (error) {
       console.error("Failed to fetch party:", error);
@@ -424,6 +429,12 @@ const WatchPartyPage = () => {
     }
 
     try {
+      console.log("Creating party with:", {
+        name: partyName,
+        movie_id: selectedMovie.id,
+        media_type: selectedMovie.media_type || "movie",
+      });
+
       const res = await axios.post(
         `${API}/watch-party`,
         {
@@ -431,13 +442,22 @@ const WatchPartyPage = () => {
           movie_id: selectedMovie.id,
           media_type: selectedMovie.media_type || "movie",
         },
-        { headers: getAuthHeaders() }
+        {
+          headers: getAuthHeaders(),
+          withCredentials: true
+        }
       );
+
+      console.log("Party created:", res.data);
       toast.success("Watch party created!");
       setCreateDialogOpen(false);
       navigate(`/watch-party/${res.data.room_id}`);
     } catch (error) {
-      toast.error("Failed to create watch party");
+      console.error("Failed to create party:", error);
+      console.error("Error response:", error.response?.data);
+      console.error("Error status:", error.response?.status);
+      const errorMsg = error.response?.data?.detail || error.message || "Failed to create watch party";
+      toast.error(errorMsg);
     }
   };
 
@@ -492,7 +512,10 @@ const WatchPartyPage = () => {
       await axios.post(
         `${API}/notifications/invite?room_id=${roomId}&invitee_email=${encodeURIComponent(inviteEmail)}`,
         {},
-        { headers: getAuthHeaders() }
+        {
+          headers: getAuthHeaders(),
+          withCredentials: true
+        }
       );
       toast.success("Invitation sent!");
       setInviteEmail("");

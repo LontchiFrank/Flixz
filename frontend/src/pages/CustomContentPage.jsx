@@ -130,6 +130,7 @@ const CustomContentPage = () => {
           ...getAuthHeaders(),
           "Content-Type": "multipart/form-data",
         },
+        withCredentials: true,
         onUploadProgress: (progressEvent) => {
           const percent = Math.round(
             (progressEvent.loaded * 100) / progressEvent.total
@@ -156,6 +157,7 @@ const CustomContentPage = () => {
     try {
       await axios.delete(`${API}/custom-content/${contentId}`, {
         headers: getAuthHeaders(),
+        withCredentials: true
       });
       toast.success("Content deleted");
       fetchContent();

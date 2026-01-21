@@ -22,6 +22,7 @@ const MyListPage = () => {
     try {
       const res = await axios.get(`${API}/my-list`, {
         headers: getAuthHeaders(),
+        withCredentials: true
       });
       setItems(res.data.items || []);
     } catch (error) {
@@ -36,6 +37,7 @@ const MyListPage = () => {
     try {
       await axios.delete(`${API}/my-list/${mediaType}/${mediaId}`, {
         headers: getAuthHeaders(),
+        withCredentials: true
       });
       setItems((prev) =>
         prev.filter(

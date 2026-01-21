@@ -57,6 +57,7 @@ const HomePage = () => {
 		try {
 			const res = await axios.get(`${API}/continue-watching`, {
 				headers: getAuthHeaders(),
+				withCredentials: true
 			});
 			setContinueWatching(res.data.items || []);
 		} catch (error) {
@@ -112,7 +113,10 @@ const HomePage = () => {
 					backdrop_path: movie.backdrop_path,
 					vote_average: movie.vote_average,
 				},
-				{ headers: getAuthHeaders() }
+				{
+					headers: getAuthHeaders(),
+					withCredentials: true
+				}
 			);
 			toast.success("Added to My List");
 		} catch (error) {
