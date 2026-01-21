@@ -1089,6 +1089,7 @@ app.add_middleware(
         "http://localhost:3001",
         "https://flixz.onrender.com",
         "https://flixz-frontend.onrender.com",
+        "https://flixz-iota.vercel.app",
         # Add any other frontend URLs here
     ],
     allow_methods=["*"],
