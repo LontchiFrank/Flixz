@@ -1021,7 +1021,14 @@ const WatchPartyPage = () => {
 
           {/* Picture-in-Picture Video Overlay (Your Video) */}
           {isInCall && (
-            <div className="absolute bottom-20 right-4 w-48 h-36 rounded-lg overflow-hidden border-2 border-[#7C3AED] shadow-2xl z-[9999] bg-[#121212]">
+            <div
+              className={`absolute ${
+                isVideoFullscreen
+                  ? 'bottom-6 right-6 w-56 h-40'
+                  : 'bottom-20 right-4 w-48 h-36'
+              } rounded-lg overflow-hidden border-2 border-[#7C3AED] shadow-2xl bg-[#121212]`}
+              style={{ zIndex: 2147483647 }}
+            >
               {localStream ? (
                 <>
                   <video
@@ -1063,11 +1070,18 @@ const WatchPartyPage = () => {
 
           {/* Remote Participant Videos Overlay */}
           {isInCall && remoteStreamEntries.length > 0 && (
-            <div className="absolute top-20 right-4 space-y-2 z-20">
+            <div
+              className={`absolute ${
+                isVideoFullscreen ? 'top-6 right-6' : 'top-20 right-4'
+              } space-y-2`}
+              style={{ zIndex: 2147483647 }}
+            >
               {remoteStreamEntries.slice(0, 3).map(([peerId, stream]) => (
                 <div
                   key={peerId}
-                  className="w-48 h-36 rounded-lg overflow-hidden border-2 border-white/20 shadow-2xl bg-[#121212]"
+                  className={`${
+                    isVideoFullscreen ? 'w-56 h-40' : 'w-48 h-36'
+                  } rounded-lg overflow-hidden border-2 border-white/20 shadow-2xl bg-[#121212]`}
                 >
                   <video
                     autoPlay
@@ -1083,7 +1097,9 @@ const WatchPartyPage = () => {
                 </div>
               ))}
               {remoteStreamEntries.length > 3 && (
-                <div className="w-48 h-12 rounded-lg bg-black/80 flex items-center justify-center text-sm">
+                <div className={`${
+                  isVideoFullscreen ? 'w-56 h-12' : 'w-48 h-12'
+                } rounded-lg bg-black/80 flex items-center justify-center text-sm`}>
                   +{remoteStreamEntries.length - 3} more
                 </div>
               )}
@@ -1093,7 +1109,8 @@ const WatchPartyPage = () => {
           {/* Fullscreen toggle */}
           <button
             onClick={toggleFullscreen}
-            className="absolute top-4 right-4 w-10 h-10 rounded-full bg-black/50 flex items-center justify-center hover:bg-black/70 transition-all z-10"
+            className="absolute top-4 right-4 w-10 h-10 rounded-full bg-black/50 flex items-center justify-center hover:bg-black/70 transition-all"
+            style={{ zIndex: 2147483646 }}
             title={isVideoFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
           >
             {isVideoFullscreen ? (
@@ -1104,7 +1121,10 @@ const WatchPartyPage = () => {
           </button>
 
           {/* Current source indicator */}
-          <div className="absolute bottom-4 left-4 px-3 py-1.5 rounded-full bg-black/70 backdrop-blur-sm text-sm flex items-center gap-2 z-10">
+          <div
+            className="absolute bottom-4 left-4 px-3 py-1.5 rounded-full bg-black/70 backdrop-blur-sm text-sm flex items-center gap-2"
+            style={{ zIndex: 2147483646 }}
+          >
             <Server className="w-4 h-4 text-[#7C3AED]" />
             {selectedSource.name}
           </div>
