@@ -351,15 +351,28 @@ const WatchPartyPage = () => {
   useEffect(() => {
     if (localVideoRef.current && localStream) {
       localVideoRef.current.srcObject = localStream;
+      // Ensure video plays
+      localVideoRef.current.play().catch(err => {
+        console.error("Error playing video:", err);
+      });
     }
   }, [localStream]);
 
   const startCall = async () => {
     try {
+      console.log("Requesting camera and microphone access...");
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        },
         audio: true,
       });
+
+      console.log("Got media stream:", stream);
+      console.log("Video tracks:", stream.getVideoTracks());
+      console.log("Audio tracks:", stream.getAudioTracks());
+
       setLocalStream(stream);
       setIsInCall(true);
 
@@ -373,7 +386,17 @@ const WatchPartyPage = () => {
       toast.success("Joined video call");
     } catch (error) {
       console.error("Failed to start call:", error);
-      toast.error("Failed to access camera/microphone");
+
+      // More detailed error messages
+      if (error.name === 'NotAllowedError') {
+        toast.error("Camera/microphone access denied. Please allow permissions in your browser.");
+      } else if (error.name === 'NotFoundError') {
+        toast.error("No camera or microphone found. Please connect a device.");
+      } else if (error.name === 'NotReadableError') {
+        toast.error("Camera or microphone is already in use by another app.");
+      } else {
+        toast.error("Failed to access camera/microphone: " + error.message);
+      }
     }
   };
 
@@ -1026,6 +1049,7 @@ const WatchPartyPage = () => {
               {isInCall ? (
                 <>
                   <button
+                    type="button"
                     onClick={toggleVideo}
                     data-testid="toggle-video-btn"
                     className={`w-12 h-12 rounded-full flex items-center justify-center transition-all ${
@@ -1041,6 +1065,7 @@ const WatchPartyPage = () => {
                     )}
                   </button>
                   <button
+                    type="button"
                     onClick={toggleAudio}
                     data-testid="toggle-audio-btn"
                     className={`w-12 h-12 rounded-full flex items-center justify-center transition-all ${
@@ -1056,6 +1081,7 @@ const WatchPartyPage = () => {
                     )}
                   </button>
                   <button
+                    type="button"
                     onClick={endCall}
                     data-testid="end-call-btn"
                     className="w-12 h-12 rounded-full bg-red-500 flex items-center justify-center hover:bg-red-600 transition-all"
@@ -1065,6 +1091,7 @@ const WatchPartyPage = () => {
                 </>
               ) : (
                 <button
+                  type="button"
                   onClick={startCall}
                   data-testid="start-call-btn"
                   className="btn-primary flex items-center gap-2"
