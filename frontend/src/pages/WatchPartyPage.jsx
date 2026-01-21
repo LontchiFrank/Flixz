@@ -378,22 +378,34 @@ const WatchPartyPage = () => {
       videoTracks: localStream?.getVideoTracks().length
     });
 
-    if (videoElement && localStream) {
+    if (videoElement && localStream && isInCall) {
       console.log("✅ Setting local stream to video element");
-      videoElement.srcObject = localStream;
 
-      // Ensure video plays
-      videoElement.play().catch(err => {
-        console.error("❌ Error playing local video:", err);
-        // Try again after a short delay
+      // Only set if it's different to avoid interrupting playback
+      if (videoElement.srcObject !== localStream) {
+        videoElement.srcObject = localStream;
+
+        // Wait a bit for the stream to be ready, then play
         setTimeout(() => {
-          videoElement.play().catch(e => console.error("❌ Retry failed:", e));
+          if (videoElement.srcObject === localStream && !videoElement.paused) {
+            // Already playing, do nothing
+            console.log("📹 Video already playing");
+            return;
+          }
+
+          videoElement.play().catch(err => {
+            // Ignore AbortError as it just means another play() was called
+            if (err.name !== 'AbortError') {
+              console.error("❌ Error playing local video:", err.name, err.message);
+            }
+          });
         }, 100);
-      });
+      }
     }
 
     return () => {
-      if (videoElement) {
+      // Don't clean up on every re-render, only when truly unmounting
+      if (videoElement && !localStream) {
         console.log("🧹 Cleaning up video element");
         videoElement.srcObject = null;
       }
@@ -1061,8 +1073,17 @@ const WatchPartyPage = () => {
                     autoPlay
                     muted
                     playsInline
-                    className="w-full h-full object-cover"
+                    controls={false}
+                    className="w-full h-full object-cover bg-black"
                     style={{ transform: 'scaleX(-1)' }}
+                    onLoadedMetadata={(e) => {
+                      console.log("📹 Video metadata loaded, attempting to play");
+                      e.target.play().catch(err => {
+                        if (err.name !== 'AbortError') {
+                          console.error("❌ Play on metadata load failed:", err);
+                        }
+                      });
+                    }}
                   />
                   <div className="absolute top-2 left-2 px-2 py-1 bg-black/80 rounded text-xs font-medium">
                     You {!isVideoEnabled && "📵"}
