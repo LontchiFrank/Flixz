@@ -65,7 +65,7 @@ const RTC_CONFIG = {
 const WatchPartyPage = () => {
   const { roomId } = useParams();
   const navigate = useNavigate();
-  const { user, getAuthHeaders } = useAuth();
+  const { user, token, getAuthHeaders } = useAuth();
   
   // Party state
   const [parties, setParties] = useState([]);
@@ -206,11 +206,25 @@ const WatchPartyPage = () => {
   const fetchPartyDetails = useCallback(async () => {
     setLoading(true);
     try {
-      console.log("Fetching party details for room:", roomId);
+      console.log("=== Starting Watch Party Load ===");
+      console.log("Room ID:", roomId);
+      console.log("User:", user);
+      console.log("Token:", token);
+      console.log("Auth Headers:", getAuthHeaders());
+      console.log("Cookies:", document.cookie);
+
+      // Verify user is authenticated
+      if (!user) {
+        console.error("❌ No user found, redirecting to login");
+        toast.error("Please log in to join the watch party");
+        navigate("/login?redirect=" + encodeURIComponent(`/watch-party/${roomId}`));
+        return;
+      }
 
       // Get party details
+      console.log("Step 1: Fetching party details...");
       const res = await axios.get(`${API}/watch-party/${roomId}`);
-      console.log("Party details:", res.data);
+      console.log("✅ Party details loaded:", res.data);
 
       setCurrentParty(res.data);
       setParticipants(res.data.participants || []);
@@ -219,17 +233,20 @@ const WatchPartyPage = () => {
 
       // Fetch movie details
       const endpoint = res.data.media_type === "movie" ? "movies" : "tv";
-      console.log(`Fetching ${endpoint} details for ID:`, res.data.movie_id);
+      console.log(`Step 2: Fetching ${endpoint} details for ID:`, res.data.movie_id);
 
       const movieRes = await axios.get(
         `${API}/${endpoint}/${res.data.movie_id}`
       );
-      console.log("Movie details:", movieRes.data);
+      console.log("✅ Movie details loaded:", movieRes.data.title || movieRes.data.name);
       setMovieDetails(movieRes.data);
 
       // Join party
-      console.log("Joining party:", roomId);
-      await axios.post(
+      console.log("Step 3: Joining party...");
+      console.log("Sending auth headers:", getAuthHeaders());
+      console.log("User object:", user);
+
+      const joinRes = await axios.post(
         `${API}/watch-party/${roomId}/join`,
         {},
         {
@@ -237,25 +254,33 @@ const WatchPartyPage = () => {
           withCredentials: true
         }
       );
-      console.log("Successfully joined party");
+      console.log("✅ Successfully joined party:", joinRes.data);
+      toast.success("Joined watch party!");
 
     } catch (error) {
-      console.error("Failed to fetch party:", error);
-      console.error("Error details:", error.response?.data);
+      console.error("❌ Failed to load watch party:", error);
+      console.error("Error response:", error.response);
+      console.error("Error status:", error.response?.status);
+      console.error("Error data:", error.response?.data);
 
       if (error.response?.status === 404) {
         toast.error("Watch party not found. It may have been deleted.");
-      } else if (error.response?.status === 401 || error.response?.status === 403) {
+      } else if (error.response?.status === 401) {
+        toast.error("Authentication failed. Please try logging in again.");
+        navigate("/login?redirect=" + encodeURIComponent(`/watch-party/${roomId}`));
+      } else if (error.response?.status === 403) {
         toast.error("You don't have permission to join this party");
       } else {
         toast.error("Failed to load watch party: " + (error.response?.data?.detail || error.message));
       }
 
-      navigate("/watch-party");
+      if (error.response?.status !== 401) {
+        navigate("/watch-party");
+      }
     } finally {
       setLoading(false);
     }
-  }, [roomId, getAuthHeaders, navigate]);
+  }, [roomId, user, token, getAuthHeaders, navigate]);
 
   const connectSocket = useCallback(() => {
     socketRef.current = io(BACKEND_URL, {
