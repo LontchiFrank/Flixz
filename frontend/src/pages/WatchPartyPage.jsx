@@ -346,6 +346,8 @@ const WatchPartyPage = () => {
   }, [roomId, user, createPeerConnection, handleOffer]);
 
   useEffect(() => {
+    console.log("🔄 Main useEffect - roomId changed:", roomId);
+
     if (roomId) {
       fetchPartyDetails();
       connectSocket();
@@ -354,12 +356,14 @@ const WatchPartyPage = () => {
     }
 
     return () => {
+      console.log("🧹 Cleanup - disconnecting socket and ending call");
       if (socketRef.current) {
         socketRef.current.disconnect();
       }
       endCall();
     };
-  }, [roomId, fetchParties, fetchPartyDetails, connectSocket, endCall]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId]);
 
   useEffect(() => {
     if (chatRef.current) {
