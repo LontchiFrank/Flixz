@@ -50,10 +50,14 @@ export const AuthProvider = ({ children }) => {
       localStorage.setItem("flixz_user", JSON.stringify(response.data));
       return response.data;
     } catch (e) {
-      setUser(null);
-      setToken(null);
-      localStorage.removeItem("flixz_user");
-      localStorage.removeItem("flixz_token");
+      console.error("Auth check failed:", e.response?.status, e.response?.data);
+      // Only logout if it's a 401 Unauthorized, not other errors like network issues
+      if (e.response?.status === 401) {
+        setUser(null);
+        setToken(null);
+        localStorage.removeItem("flixz_user");
+        localStorage.removeItem("flixz_token");
+      }
       return null;
     } finally {
       setLoading(false);

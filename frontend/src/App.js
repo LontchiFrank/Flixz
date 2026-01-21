@@ -61,7 +61,13 @@ const AuthCallback = () => {
 						headers: { "X-Session-ID": sessionId },
 						withCredentials: true,
 					});
-					login(response.data, null);
+					// Store session_token from cookie or response
+					const sessionToken = document.cookie
+						.split('; ')
+						.find(row => row.startsWith('session_token='))
+						?.split('=')[1];
+
+					login(response.data, sessionToken || null);
 					navigate("/browse", {
 						replace: true,
 						state: { user: response.data },
