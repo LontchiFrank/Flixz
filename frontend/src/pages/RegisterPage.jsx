@@ -44,7 +44,7 @@ const RegisterPage = () => {
         password,
       });
       login(res.data.user, res.data.access_token);
-      toast.success("Welcome to Flixz!");
+      toast.success("Welcome to Flixzbox!");
       navigate("/browse");
     } catch (error) {
       toast.error(error.response?.data?.detail || "Registration failed");
@@ -73,7 +73,7 @@ const RegisterPage = () => {
           <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#7C3AED] to-[#06B6D4] flex items-center justify-center mx-auto mb-4">
             <Sparkles className="w-8 h-8 text-white" />
           </div>
-          <h1 className="text-3xl font-bold">Join Flixz</h1>
+          <h1 className="text-3xl font-bold">Join Flixzbox</h1>
           <p className="text-[#A1A1AA] mt-2">Create your account</p>
         </div>
 

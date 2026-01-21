@@ -56,7 +56,7 @@ const LoginPage = () => {
           <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#7C3AED] to-[#06B6D4] flex items-center justify-center mx-auto mb-4">
             <Sparkles className="w-8 h-8 text-white" />
           </div>
-          <h1 className="text-3xl font-bold">Welcome to Flixz</h1>
+          <h1 className="text-3xl font-bold">Welcome to Flixzbox</h1>
           <p className="text-[#A1A1AA] mt-2">Sign in to continue</p>
         </div>
 

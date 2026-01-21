@@ -490,7 +490,7 @@ const WatchPartyPage = () => {
 
   const shareToSocial = (platform) => {
     const link = `${window.location.origin}/watch-party/${roomId}`;
-    const text = `Join my watch party on Flixz! We're watching ${movieDetails?.title || movieDetails?.name}`;
+    const text = `Join my watch party on Flixzbox! We're watching ${movieDetails?.title || movieDetails?.name}`;
     
     const urls = {
       whatsapp: `https://wa.me/?text=${encodeURIComponent(text + " " + link)}`,
