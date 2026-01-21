@@ -419,9 +419,20 @@ const WatchPartyPage = () => {
         console.log("📹 Video track enabled:", videoTrack.enabled);
       }
 
+      console.log("🎯 About to set localStream and isInCall");
       setLocalStream(stream);
       setIsInCall(true);
-      console.log("✅ Set isInCall to true, localStream set");
+
+      // Force a render by using setTimeout
+      setTimeout(() => {
+        console.log("✅ After setState - isInCall should be true now");
+        console.log("🔍 Current state:", {
+          isInCall: true,
+          hasLocalStream: !!stream,
+          streamId: stream.id,
+          videoTracks: stream.getVideoTracks().length
+        });
+      }, 100);
 
       // Join WebRTC room
       socketRef.current?.emit("webrtc_join", {
@@ -430,7 +441,7 @@ const WatchPartyPage = () => {
         user_name: user?.name,
       });
 
-      toast.success("Joined video call - your video should appear!");
+      toast.success("Joined video call - check bottom-right corner!");
     } catch (error) {
       console.error("❌ Failed to start call:", error);
 
@@ -1002,6 +1013,14 @@ const WatchPartyPage = () => {
           </div>
         </div>
 
+        {/* Debug Info */}
+        <div className="fixed top-4 left-4 z-[10000] bg-black/90 text-white p-3 rounded-lg text-xs font-mono border border-[#7C3AED]">
+          <div>isInCall: {String(isInCall)}</div>
+          <div>localStream: {localStream ? '✅ YES' : '❌ NO'}</div>
+          <div>videoTracks: {localStream?.getVideoTracks().length || 0}</div>
+          <div>streamActive: {localStream?.active ? '✅' : '❌'}</div>
+        </div>
+
         {/* Video Player Section */}
         <div ref={videoPlayerRef} className="flex-1 relative bg-black">
           {/* Embedded Streaming Player (default) */}
@@ -1051,7 +1070,10 @@ const WatchPartyPage = () => {
 
           {/* Picture-in-Picture Video Overlay (Your Video) */}
           {isInCall && (
-            <div className="absolute bottom-20 right-4 w-48 h-36 rounded-lg overflow-hidden border-2 border-[#7C3AED] shadow-2xl z-20 bg-[#121212]">
+            <div className="absolute bottom-20 right-4 w-48 h-36 rounded-lg overflow-hidden border-4 border-[#7C3AED] shadow-2xl z-[9999] bg-[#121212]">
+              <div className="absolute top-2 left-2 px-2 py-1 bg-green-500 rounded text-xs font-bold z-10">
+                IN CALL
+              </div>
               {localStream ? (
                 <>
                   <video
@@ -1059,7 +1081,7 @@ const WatchPartyPage = () => {
                     muted
                     playsInline
                     controls={false}
-                    className="w-full h-full object-cover bg-black"
+                    className="w-full h-full object-cover bg-red-500"
                     style={{ transform: 'scaleX(-1)' }}
                     onLoadedMetadata={(e) => {
                       console.log("📹 Video metadata loaded, attempting to play");
@@ -1073,7 +1095,7 @@ const WatchPartyPage = () => {
                       }, 150);
                     }}
                   />
-                  <div className="absolute top-2 left-2 px-2 py-1 bg-black/80 rounded text-xs font-medium">
+                  <div className="absolute bottom-2 left-2 px-2 py-1 bg-black/80 rounded text-xs font-medium">
                     You {!isVideoEnabled && "📵"}
                   </div>
                   {!isVideoEnabled && (
@@ -1085,8 +1107,8 @@ const WatchPartyPage = () => {
                   )}
                 </>
               ) : (
-                <div className="w-full h-full flex items-center justify-center text-xs text-[#A1A1AA]">
-                  Loading camera...
+                <div className="w-full h-full flex items-center justify-center text-sm text-white bg-yellow-500">
+                  LOADING CAMERA...
                 </div>
               )}
             </div>
