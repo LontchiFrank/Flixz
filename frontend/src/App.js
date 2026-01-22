@@ -93,7 +93,7 @@ const AuthCallback = () => {
 
 // Protected Route
 const ProtectedRoute = ({ children }) => {
-	const { user, loading, checkAuth } = useAuth();
+	const { user, loading } = useAuth();
 	const location = useLocation();
 	const [isChecking, setIsChecking] = useState(true);
 
@@ -105,21 +105,27 @@ const ProtectedRoute = ({ children }) => {
 			return;
 		}
 
-		// If user already exists in context (from localStorage), skip auth check
+		// Check localStorage for existing user
+		const storedUser = localStorage.getItem("flixz_user");
+		const storedToken = localStorage.getItem("flixz_token");
+
+		if (storedUser && storedToken) {
+			console.log("ProtectedRoute: User found in localStorage, skipping auth check");
+			setIsChecking(false);
+			return;
+		}
+
+		// If user exists in context, skip auth check
 		if (user) {
 			console.log("ProtectedRoute: User exists in context, skipping auth check");
 			setIsChecking(false);
 			return;
 		}
 
-		// Otherwise verify authentication
-		console.log("ProtectedRoute: Verifying authentication...");
-		const verify = async () => {
-			await checkAuth();
-			setIsChecking(false);
-		};
-		verify();
-	}, [checkAuth, location.state, user]);
+		// If no user found anywhere, mark as done checking (will redirect to login)
+		console.log("ProtectedRoute: No user found, will redirect to login");
+		setIsChecking(false);
+	}, [location.state, user]);
 
 	if (isChecking || loading) {
 		return (
