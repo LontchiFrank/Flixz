@@ -6,6 +6,7 @@ import React, {
 	useState,
 	useCallback,
 	useEffect,
+	useRef,
 } from "react";
 import axios from "axios";
 
@@ -30,10 +31,14 @@ export const AuthProvider = ({ children }) => {
 		return storedToken;
 	});
 	const [loading, setLoading] = useState(false);
+	const hasRestoredFromStorage = useRef(false);
 
 	// Restore user from localStorage on mount if state is empty
 	useEffect(() => {
-		// Only run on initial mount, not on every user state change
+		// Only run once on initial mount using ref
+		if (hasRestoredFromStorage.current) return;
+		hasRestoredFromStorage.current = true;
+
 		if (!user) {
 			const storedUser = localStorage.getItem("flixz_user");
 			const storedToken = localStorage.getItem("flixz_token");
@@ -51,7 +56,7 @@ export const AuthProvider = ({ children }) => {
 				}
 			}
 		}
-	}, [user]); // Empty dependency array - only run once on mount
+	}, [user]);
 
 	// Listen for storage events in other tabs (logout in another tab)
 	useEffect(() => {

@@ -354,17 +354,51 @@ const WatchPartyPage = () => {
       });
     });
 
+    // Handle existing peers list when joining
+    socketRef.current.on("webrtc_peers", async (data) => {
+      console.log("📋 Received existing peers:", data.peers);
+      // Create peer connections with all existing peers
+      for (const peer of data.peers) {
+        console.log("🤝 Creating peer connection with:", peer.user_name);
+        await createPeerConnection(peer.sid, true); // true = create offer
+      }
+    });
+
+    // Handle new peer joining
+    socketRef.current.on("webrtc_peer_joined", async (data) => {
+      console.log("👋 New peer joined:", data.user_name, "sid:", data.sid);
+      toast.info(`${data.user_name} joined the video call`);
+      // Don't create offer - the new peer will send one to us
+    });
+
     socketRef.current.on("webrtc_offer", async (data) => {
-      console.log("Received offer from:", data.from);
+      console.log("📨 Received offer from:", data.from);
       await handleOffer(data.from, data.offer);
     });
 
     socketRef.current.on("webrtc_answer", async (data) => {
-      console.log("Received answer from:", data.from);
+      console.log("✅ Received answer from:", data.from);
       const pc = peerConnectionsRef.current[data.from];
       if (pc) {
         await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
       }
+    });
+
+    // Handle peer leaving
+    socketRef.current.on("webrtc_peer_left", (data) => {
+      console.log("👋 Peer left:", data.sid);
+      // Close and remove peer connection
+      const pc = peerConnectionsRef.current[data.sid];
+      if (pc) {
+        pc.close();
+        delete peerConnectionsRef.current[data.sid];
+      }
+      // Remove remote stream
+      setRemoteStreams((prev) => {
+        const updated = { ...prev };
+        delete updated[data.sid];
+        return updated;
+      });
     });
 
     socketRef.current.on("webrtc_ice_candidate", async (data) => {
