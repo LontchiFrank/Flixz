@@ -234,6 +234,16 @@ const WatchPartyPage = () => {
       setIsPlaying(res.data.is_playing);
       setCurrentTime(res.data.current_time);
 
+      // Set current source if available
+      if (res.data.current_source) {
+        const sourceIndex = STREAMING_SOURCES.findIndex(s => s.id === res.data.current_source);
+        if (sourceIndex !== -1) {
+          console.log("🎬 Setting initial source:", STREAMING_SOURCES[sourceIndex].name);
+          setSelectedSource(STREAMING_SOURCES[sourceIndex]);
+          setCurrentSourceIndex(sourceIndex);
+        }
+      }
+
       // Fetch movie details
       const endpoint = res.data.media_type === "movie" ? "movies" : "tv";
       console.log(`Step 2: Fetching ${endpoint} details for ID:`, res.data.movie_id);
@@ -323,8 +333,26 @@ const WatchPartyPage = () => {
     });
 
     socketRef.current.on("playback_sync", (data) => {
+      console.log("📺 Playback sync received:", data);
       setIsPlaying(data.is_playing);
       setCurrentTime(data.current_time);
+
+      // Sync source if provided
+      if (data.source) {
+        const sourceIndex = STREAMING_SOURCES.findIndex(s => s.id === data.source);
+        if (sourceIndex !== -1) {
+          console.log("🔄 Syncing to source:", STREAMING_SOURCES[sourceIndex].name);
+          setSelectedSource(STREAMING_SOURCES[sourceIndex]);
+          setCurrentSourceIndex(sourceIndex);
+          toast.info(`Source changed to ${STREAMING_SOURCES[sourceIndex].name}`);
+        }
+      }
+
+      // Show sync notification
+      if (data.user_name && data.user_name !== user?.name) {
+        const action = data.is_playing ? "▶️ resumed playback" : "⏸️ paused playback";
+        toast.info(`${data.user_name} ${action}`, { duration: 2000 });
+      }
     });
 
     socketRef.current.on("new_message", (data) => {
@@ -415,10 +443,18 @@ const WatchPartyPage = () => {
       console.log("Media toggle:", data);
     });
 
+    socketRef.current.on("party_deleted", (data) => {
+      console.log("🗑️ Party deleted by host");
+      toast.error(`Watch party ended by ${data.user_name}`);
+      setTimeout(() => {
+        navigate("/watch-party");
+      }, 2000);
+    });
+
     socketRef.current.on("disconnect", () => {
       console.log("Disconnected from socket");
     });
-  }, [roomId, user, createPeerConnection, handleOffer]);
+  }, [roomId, user, createPeerConnection, handleOffer, navigate]);
 
   useEffect(() => {
     if (roomId) {
@@ -620,7 +656,9 @@ const WatchPartyPage = () => {
       room_id: roomId,
       is_playing: newState,
       current_time: currentTime,
+      user_name: user?.name,
     });
+    toast.success(newState ? "▶️ Resumed playback" : "⏸️ Paused playback");
   };
 
   const sendMessage = (e) => {
@@ -687,6 +725,31 @@ const WatchPartyPage = () => {
     }
   };
 
+  const deleteParty = async () => {
+    if (!window.confirm("Are you sure you want to end this watch party? All participants will be disconnected.")) {
+      return;
+    }
+
+    try {
+      await axios.delete(`${API}/watch-party/${roomId}`, {
+        headers: getAuthHeaders(),
+        withCredentials: true
+      });
+
+      // Notify all participants via socket
+      socketRef.current?.emit("delete_party", {
+        room_id: roomId,
+        user_name: user?.name,
+      });
+
+      toast.success("Watch party ended");
+      navigate("/watch-party");
+    } catch (error) {
+      console.error("Delete party error:", error);
+      toast.error(error.response?.data?.detail || "Failed to delete watch party");
+    }
+  };
+
   const getTrailerUrl = () => {
     const videos = movieDetails?.videos?.results || [];
     const trailer = videos.find(
@@ -712,31 +775,33 @@ const WatchPartyPage = () => {
     const nextIndex = (currentSourceIndex + 1) % (STREAMING_SOURCES.length - 1); // Skip "Trailer Only"
     setCurrentSourceIndex(nextIndex);
     setSelectedSource(STREAMING_SOURCES[nextIndex]);
-    
+
     // Sync source change with other participants
     socketRef.current?.emit("sync_playback", {
       room_id: roomId,
       is_playing: isPlaying,
       current_time: currentTime,
       source: STREAMING_SOURCES[nextIndex].id,
+      user_name: user?.name,
     });
-    
-    toast.info(`Trying ${STREAMING_SOURCES[nextIndex].name}...`);
+
+    toast.success(`Switched to ${STREAMING_SOURCES[nextIndex].name}`);
   };
 
   const changeSource = (source, index) => {
     setSelectedSource(source);
     setCurrentSourceIndex(index !== undefined ? index : STREAMING_SOURCES.findIndex(s => s.id === source.id));
     setShowSourcePicker(false);
-    
+
     // Sync source change with other participants
     socketRef.current?.emit("sync_playback", {
       room_id: roomId,
       is_playing: isPlaying,
       current_time: currentTime,
       source: source.id,
+      user_name: user?.name,
     });
-    
+
     toast.success(`Switched to ${source.name}`);
   };
 
@@ -907,6 +972,7 @@ const WatchPartyPage = () => {
   const title = movieDetails?.title || movieDetails?.name;
   const remoteStreamEntries = Object.entries(remoteStreams);
   const showEmbeddedPlayer = streamingUrl && selectedSource.id !== "trailer";
+  const isCreator = currentParty?.host_id === user?.user_id || currentParty?.host_name === user?.name;
 
   return (
     <div
@@ -1065,6 +1131,19 @@ const WatchPartyPage = () => {
                 </div>
               </DialogContent>
             </Dialog>
+
+            {/* Delete Party Button (Creator Only) */}
+            {isCreator && (
+              <button
+                onClick={deleteParty}
+                data-testid="delete-party-btn"
+                className="btn-secondary flex items-center gap-1 md:gap-2 px-2 md:px-3 py-2 text-sm bg-red-500/10 hover:bg-red-500/20 text-red-500 border-red-500/20"
+                title="End watch party"
+              >
+                <X className="w-3 h-3 md:w-4 md:h-4" />
+                <span className="hidden sm:inline">End Party</span>
+              </button>
+            )}
           </div>
         </div>
 

@@ -108,6 +108,7 @@ class WatchPartyResponse(BaseModel):
     created_at: datetime
     is_playing: bool = False
     current_time: float = 0.0
+    current_source: Optional[str] = None
     participants: List[Dict[str, str]] = []
 
 class MyListItem(BaseModel):
@@ -576,6 +577,7 @@ async def create_watch_party(data: WatchPartyCreate, user: dict = Depends(get_cu
         "created_at": datetime.now(timezone.utc).isoformat(),
         "is_playing": False,
         "current_time": 0.0,
+        "current_source": "vidsrcxyz",  # Default to first source
         "participants": [{"user_id": user["user_id"], "name": user["name"]}]
     }
     
@@ -678,18 +680,29 @@ async def sync_playback(sid, data):
     room_id = data.get('room_id')
     is_playing = data.get('is_playing')
     current_time = data.get('current_time')
-    
+    source = data.get('source')
+    user_name = data.get('user_name')
+
     # Update database
+    update_data = {"is_playing": is_playing, "current_time": current_time}
+    if source:
+        update_data["current_source"] = source
+
     await db.watch_parties.update_one(
         {"room_id": room_id},
-        {"$set": {"is_playing": is_playing, "current_time": current_time}}
+        {"$set": update_data}
     )
-    
+
     # Broadcast to room
-    await sio.emit('playback_sync', {
+    broadcast_data = {
         'is_playing': is_playing,
-        'current_time': current_time
-    }, room=room_id, skip_sid=sid)
+        'current_time': current_time,
+        'user_name': user_name
+    }
+    if source:
+        broadcast_data['source'] = source
+
+    await sio.emit('playback_sync', broadcast_data, room=room_id, skip_sid=sid)
 
 @sio.event
 async def chat_message(sid, data):
@@ -702,6 +715,20 @@ async def chat_message(sid, data):
         'message': message,
         'timestamp': datetime.now(timezone.utc).isoformat()
     }, room=room_id)
+
+@sio.event
+async def delete_party(sid, data):
+    """Host deletes the watch party"""
+    room_id = data.get('room_id')
+    user_name = data.get('user_name', 'Host')
+
+    # Notify all participants
+    await sio.emit('party_deleted', {
+        'user_name': user_name,
+        'room_id': room_id
+    }, room=room_id)
+
+    logger.info(f"Party {room_id} deleted by {user_name}")
 
 # ==================== WEBRTC SIGNALING ====================
 
