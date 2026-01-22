@@ -1,17 +1,23 @@
 import React from "react";
 import { NavLink } from "react-router-dom";
-import { Home, Film, Tv, Search, User } from "lucide-react";
+import { Home, Film, Tv, Search, User, Users } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 
 const MobileNav = () => {
   const { user } = useAuth();
 
-  const navItems = [
+  const navItems = user ? [
+    { icon: Home, label: "Home", path: "/" },
+    { icon: Film, label: "Movies", path: "/browse/movies" },
+    { icon: Users, label: "Party", path: "/watch-party" },
+    { icon: Search, label: "Search", path: "/search" },
+    { icon: User, label: "Profile", path: "/my-list" },
+  ] : [
     { icon: Home, label: "Home", path: "/" },
     { icon: Film, label: "Movies", path: "/browse/movies" },
     { icon: Tv, label: "TV", path: "/browse/tv" },
     { icon: Search, label: "Search", path: "/search" },
-    { icon: User, label: user ? "Profile" : "Login", path: user ? "/my-list" : "/login" },
+    { icon: User, label: "Login", path: "/login" },
   ];
 
   return (

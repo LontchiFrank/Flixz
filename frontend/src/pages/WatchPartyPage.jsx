@@ -101,7 +101,10 @@ const WatchPartyPage = () => {
   const [selectedSource, setSelectedSource] = useState(STREAMING_SOURCES[0]);
   const [showSourcePicker, setShowSourcePicker] = useState(false);
   const [currentSourceIndex, setCurrentSourceIndex] = useState(0);
-  
+
+  // Mobile chat toggle
+  const [isChatOpen, setIsChatOpen] = useState(false);
+
   // Refs
   const socketRef = useRef(null);
   const chatRef = useRef(null);
@@ -741,11 +744,11 @@ const WatchPartyPage = () => {
   if (!roomId) {
     return (
       <div className="min-h-screen bg-[#050505] pb-20 md:pb-8" data-testid="watch-party-list">
-        <div className="max-w-7xl mx-auto px-6 md:px-12 pt-8">
-          <div className="flex items-center justify-between mb-8">
+        <div className="max-w-7xl mx-auto px-4 md:px-6 lg:px-12 pt-6 md:pt-8">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6 md:mb-8">
             <div>
-              <h1 className="text-3xl md:text-4xl font-bold">Watch Party</h1>
-              <p className="text-[#A1A1AA] mt-2">
+              <h1 className="text-2xl md:text-3xl lg:text-4xl font-bold">Watch Party</h1>
+              <p className="text-sm md:text-base text-[#A1A1AA] mt-1 md:mt-2">
                 Watch movies together with friends
               </p>
             </div>
@@ -754,15 +757,15 @@ const WatchPartyPage = () => {
               <DialogTrigger asChild>
                 <Button
                   data-testid="create-party-btn"
-                  className="btn-primary flex items-center gap-2"
+                  className="btn-primary flex items-center gap-2 w-full sm:w-auto"
                 >
-                  <Plus className="w-5 h-5" />
+                  <Plus className="w-4 h-4 md:w-5 md:h-5" />
                   Create Party
                 </Button>
               </DialogTrigger>
-              <DialogContent className="bg-[#0A0A0A] border-white/10 max-w-lg">
+              <DialogContent className="bg-[#0A0A0A] border-white/10 max-w-lg mx-4">
                 <DialogHeader>
-                  <DialogTitle>Create Watch Party</DialogTitle>
+                  <DialogTitle className="text-lg md:text-xl">Create Watch Party</DialogTitle>
                 </DialogHeader>
                 <div className="space-y-4 mt-4">
                   <Input
@@ -770,19 +773,19 @@ const WatchPartyPage = () => {
                     value={partyName}
                     onChange={(e) => setPartyName(e.target.value)}
                     data-testid="party-name-input"
-                    className="bg-black/50 border-white/10"
+                    className="bg-black/50 border-white/10 text-sm md:text-base"
                   />
 
-                  <div className="flex gap-2">
+                  <div className="flex flex-col sm:flex-row gap-2">
                     <Input
                       placeholder="Search for a movie or show..."
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && searchMovies()}
                       data-testid="movie-search-input"
-                      className="bg-black/50 border-white/10"
+                      className="bg-black/50 border-white/10 text-sm md:text-base"
                     />
-                    <Button onClick={searchMovies} variant="secondary">
+                    <Button onClick={searchMovies} variant="secondary" className="sm:flex-shrink-0">
                       Search
                     </Button>
                   </div>
@@ -794,7 +797,7 @@ const WatchPartyPage = () => {
                           key={item.id}
                           onClick={() => setSelectedMovie(item)}
                           data-testid={`search-result-${item.id}`}
-                          className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-all ${
+                          className={`flex items-center gap-2 md:gap-3 p-2 rounded-lg cursor-pointer transition-all ${
                             selectedMovie?.id === item.id
                               ? "bg-[#7C3AED]/20 border border-[#7C3AED]"
                               : "bg-white/5 hover:bg-white/10"
@@ -804,14 +807,14 @@ const WatchPartyPage = () => {
                             <img
                               src={`${IMAGE_BASE}w92${item.poster_path}`}
                               alt={item.title || item.name}
-                              className="w-12 h-16 object-cover rounded"
+                              className="w-10 h-14 md:w-12 md:h-16 object-cover rounded flex-shrink-0"
                             />
                           )}
-                          <div>
-                            <p className="font-medium">
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium text-sm md:text-base truncate">
                               {item.title || item.name}
                             </p>
-                            <p className="text-sm text-[#A1A1AA]">
+                            <p className="text-xs md:text-sm text-[#A1A1AA]">
                               {(item.release_date || item.first_air_date)?.split("-")[0]} •{" "}
                               {item.media_type === "tv" ? "TV Show" : "Movie"}
                             </p>
@@ -835,30 +838,30 @@ const WatchPartyPage = () => {
           </div>
 
           {loading ? (
-            <div className="flex justify-center py-20">
-              <div className="w-12 h-12 border-4 border-[#7C3AED] border-t-transparent rounded-full animate-spin" />
+            <div className="flex justify-center py-12 md:py-20">
+              <div className="w-10 h-10 md:w-12 md:h-12 border-4 border-[#7C3AED] border-t-transparent rounded-full animate-spin" />
             </div>
           ) : parties.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6">
               {parties.map((party) => (
                 <div
                   key={party.room_id}
                   onClick={() => navigate(`/watch-party/${party.room_id}`)}
                   data-testid={`party-card-${party.room_id}`}
-                  className="glass rounded-xl p-6 cursor-pointer hover:bg-white/5 transition-all group"
+                  className="glass rounded-xl p-4 md:p-6 cursor-pointer hover:bg-white/5 transition-all group active:scale-95"
                 >
-                  <div className="flex items-start justify-between mb-4">
-                    <div>
-                      <h3 className="font-semibold text-lg group-hover:text-[#7C3AED] transition-colors">
+                  <div className="flex items-start justify-between mb-3 md:mb-4">
+                    <div className="flex-1 min-w-0 pr-2">
+                      <h3 className="font-semibold text-base md:text-lg group-hover:text-[#7C3AED] transition-colors truncate">
                         {party.name}
                       </h3>
-                      <p className="text-sm text-[#A1A1AA]">
+                      <p className="text-xs md:text-sm text-[#A1A1AA] truncate">
                         Hosted by {party.host_name}
                       </p>
                     </div>
-                    <div className="flex items-center gap-1 text-[#A1A1AA]">
-                      <Users className="w-4 h-4" />
-                      <span className="text-sm">
+                    <div className="flex items-center gap-1 text-[#A1A1AA] flex-shrink-0">
+                      <Users className="w-3 h-3 md:w-4 md:h-4" />
+                      <span className="text-xs md:text-sm">
                         {party.participants?.length || 1}
                       </span>
                     </div>
@@ -869,7 +872,7 @@ const WatchPartyPage = () => {
                         party.is_playing ? "bg-[#10B981]" : "bg-[#F59E0B]"
                       }`}
                     />
-                    <span className="text-sm text-[#A1A1AA]">
+                    <span className="text-xs md:text-sm text-[#A1A1AA]">
                       {party.is_playing ? "Playing" : "Paused"}
                     </span>
                   </div>
@@ -877,10 +880,10 @@ const WatchPartyPage = () => {
               ))}
             </div>
           ) : (
-            <div className="text-center py-20">
-              <Users className="w-16 h-16 text-[#52525B] mx-auto mb-4" />
-              <h3 className="text-xl font-semibold mb-2">No active parties</h3>
-              <p className="text-[#A1A1AA]">
+            <div className="text-center py-12 md:py-20 px-4">
+              <Users className="w-12 h-12 md:w-16 md:h-16 text-[#52525B] mx-auto mb-4" />
+              <h3 className="text-lg md:text-xl font-semibold mb-2">No active parties</h3>
+              <p className="text-sm md:text-base text-[#A1A1AA]">
                 Create a watch party to get started
               </p>
             </div>
@@ -907,92 +910,106 @@ const WatchPartyPage = () => {
 
   return (
     <div
-      className="min-h-screen bg-[#050505] grid grid-cols-1 lg:grid-cols-[1fr_380px]"
+      className="min-h-screen bg-[#050505] pb-16 md:pb-0"
       data-testid="watch-party-room"
     >
       {/* Main Section */}
-      <div className="relative flex flex-col">
+      <div className="relative flex flex-col min-h-screen">
         {/* Header */}
-        <div className="p-4 flex items-center justify-between border-b border-white/10">
-          <div className="flex items-center gap-4">
+        <div className="p-3 md:p-4 flex items-center justify-between border-b border-white/10">
+          <div className="flex items-center gap-2 md:gap-4 flex-1 min-w-0">
             <button
               onClick={() => navigate("/watch-party")}
               data-testid="back-to-list"
-              className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/20 transition-all"
+              className="w-9 h-9 md:w-10 md:h-10 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/20 transition-all flex-shrink-0"
             >
-              <ChevronLeft className="w-5 h-5" />
+              <ChevronLeft className="w-4 h-4 md:w-5 md:h-5" />
             </button>
-            <div>
-              <h2 className="font-semibold">{currentParty?.name}</h2>
-              <p className="text-sm text-[#A1A1AA]">{title}</p>
+            <div className="min-w-0 flex-1">
+              <h2 className="font-semibold text-sm md:text-base truncate">{currentParty?.name}</h2>
+              <p className="text-xs md:text-sm text-[#A1A1AA] truncate">{title}</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 md:gap-2 flex-shrink-0">
+            {/* Mobile Chat Toggle */}
+            <button
+              onClick={() => setIsChatOpen(!isChatOpen)}
+              className="lg:hidden w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 transition-all flex items-center justify-center relative"
+              title="Toggle chat"
+            >
+              <Send className="w-4 h-4" />
+              {messages.length > 0 && (
+                <span className="absolute -top-1 -right-1 w-3 h-3 bg-[#7C3AED] rounded-full" />
+              )}
+            </button>
+
             {/* Source Selector */}
             <button
               onClick={tryNextSource}
               data-testid="try-next-source-btn"
-              className="flex items-center gap-2 px-3 py-2 rounded-full bg-[#7C3AED]/20 text-[#7C3AED] hover:bg-[#7C3AED]/30 transition-all"
+              className="hidden sm:flex items-center gap-2 px-2 md:px-3 py-2 rounded-full bg-[#7C3AED]/20 text-[#7C3AED] hover:bg-[#7C3AED]/30 transition-all text-sm"
             >
               <RefreshCw className="w-4 h-4" />
-              <span className="text-sm hidden md:inline">Try Next</span>
+              <span className="hidden md:inline">Try Next</span>
             </button>
             <div className="relative">
               <button
                 onClick={() => setShowSourcePicker(!showSourcePicker)}
                 data-testid="source-picker-btn"
-                className="flex items-center gap-2 px-3 py-2 rounded-full bg-white/10 hover:bg-white/20 transition-all"
+                className="flex items-center gap-1 md:gap-2 px-2 md:px-3 py-2 rounded-full bg-white/10 hover:bg-white/20 transition-all text-sm"
               >
                 <Server className="w-4 h-4" />
-                <span className="text-sm hidden md:inline">{selectedSource.name}</span>
+                <span className="hidden md:inline">{selectedSource.name}</span>
               </button>
               
               {/* Source Picker Dropdown */}
               {showSourcePicker && (
-                <div className="absolute right-0 top-full mt-2 bg-[#0A0A0A] border border-white/10 rounded-xl p-2 z-50 min-w-[200px]">
+                <div className="absolute right-0 top-full mt-2 bg-[#0A0A0A] border border-white/10 rounded-xl p-2 z-50 min-w-[200px] max-w-[280px] shadow-xl">
                   <p className="text-xs text-[#A1A1AA] px-3 py-2">Select Streaming Source</p>
-                  {STREAMING_SOURCES.map((source, index) => (
-                    <button
-                      key={source.id}
-                      onClick={() => changeSource(source, index)}
-                      data-testid={`source-${source.id}`}
-                      className={`w-full text-left px-4 py-2 rounded-lg transition-all flex items-center gap-2 ${
-                        selectedSource.id === source.id
-                          ? "bg-[#7C3AED] text-white"
-                          : "hover:bg-white/5"
-                      }`}
-                    >
-                      {source.id === "trailer" ? (
-                        <Film className="w-4 h-4" />
-                      ) : (
-                        <Monitor className="w-4 h-4" />
-                      )}
-                      {source.name}
-                      {index < 3 && source.id !== "trailer" && (
-                        <span className="ml-auto text-xs bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded">
-                          Popular
-                        </span>
-                      )}
-                    </button>
-                  ))}
+                  <div className="max-h-[320px] overflow-y-auto">
+                    {STREAMING_SOURCES.map((source, index) => (
+                      <button
+                        key={source.id}
+                        onClick={() => changeSource(source, index)}
+                        data-testid={`source-${source.id}`}
+                        className={`w-full text-left px-3 md:px-4 py-2 rounded-lg transition-all flex items-center gap-2 text-sm ${
+                          selectedSource.id === source.id
+                            ? "bg-[#7C3AED] text-white"
+                            : "hover:bg-white/5"
+                        }`}
+                      >
+                        {source.id === "trailer" ? (
+                          <Film className="w-4 h-4 flex-shrink-0" />
+                        ) : (
+                          <Monitor className="w-4 h-4 flex-shrink-0" />
+                        )}
+                        <span className="flex-1 truncate">{source.name}</span>
+                        {index < 3 && source.id !== "trailer" && (
+                          <span className="text-xs bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded flex-shrink-0">
+                            Popular
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
-            
+
             <button
               onClick={copyRoomLink}
               data-testid="copy-link-btn"
-              className="btn-secondary flex items-center gap-2"
+              className="btn-secondary flex items-center gap-1 md:gap-2 px-2 md:px-3 py-2 text-sm"
             >
               <Link2 className="w-4 h-4" />
-              <span className="hidden md:inline">Copy Link</span>
+              <span className="hidden lg:inline">Copy Link</span>
             </button>
-            
+
             {/* Share dropdown */}
-            <div className="relative group">
-              <button className="btn-secondary flex items-center gap-2">
+            <div className="relative group hidden sm:block">
+              <button className="btn-secondary flex items-center gap-1 md:gap-2 px-2 md:px-3 py-2 text-sm">
                 <Share2 className="w-4 h-4" />
-                <span className="hidden md:inline">Share</span>
+                <span className="hidden lg:inline">Share</span>
               </button>
               <div className="absolute right-0 top-full mt-2 bg-[#0A0A0A] border border-white/10 rounded-lg p-2 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 min-w-[150px]">
                 <button
@@ -1019,18 +1036,18 @@ const WatchPartyPage = () => {
             {/* Invite Dialog */}
             <Dialog open={inviteDialogOpen} onOpenChange={setInviteDialogOpen}>
               <DialogTrigger asChild>
-                <button className="btn-primary flex items-center gap-2">
-                  <Plus className="w-4 h-4" />
-                  Invite
+                <button className="btn-primary flex items-center gap-1 md:gap-2 px-2 md:px-3 py-2 text-sm">
+                  <Plus className="w-3 h-3 md:w-4 md:h-4" />
+                  <span className="hidden sm:inline">Invite</span>
                 </button>
               </DialogTrigger>
-              <DialogContent className="bg-[#0A0A0A] border-white/10">
+              <DialogContent className="bg-[#0A0A0A] border-white/10 mx-4 max-w-md">
                 <DialogHeader>
-                  <DialogTitle>Invite Friends</DialogTitle>
+                  <DialogTitle className="text-lg md:text-xl">Invite Friends</DialogTitle>
                 </DialogHeader>
                 <div className="space-y-4 mt-4">
                   <div className="bg-[#7C3AED]/10 border border-[#7C3AED]/20 rounded-lg p-3">
-                    <p className="text-sm text-[#A1A1AA]">
+                    <p className="text-xs md:text-sm text-[#A1A1AA]">
                       💡 <span className="text-white">Tip:</span> If your friend has a Flixzbox account, they'll receive a notification. Otherwise, use the <span className="text-[#7C3AED]">Copy Link</span> button to share directly!
                     </p>
                   </div>
@@ -1040,9 +1057,9 @@ const WatchPartyPage = () => {
                     onChange={(e) => setInviteEmail(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && sendInvite()}
                     data-testid="invite-email-input"
-                    className="bg-black/50 border-white/10"
+                    className="bg-black/50 border-white/10 text-sm md:text-base"
                   />
-                  <Button onClick={sendInvite} className="w-full btn-primary">
+                  <Button onClick={sendInvite} className="w-full btn-primary text-sm md:text-base">
                     Send Invitation
                   </Button>
                 </div>
@@ -1057,7 +1074,7 @@ const WatchPartyPage = () => {
           {showEmbeddedPlayer ? (
             <iframe
               src={streamingUrl}
-              className="w-full h-full min-h-[400px]"
+              className="w-full h-full min-h-[250px] md:min-h-[400px]"
               allowFullScreen
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
             />
@@ -1065,13 +1082,13 @@ const WatchPartyPage = () => {
             // YouTube Trailer (fallback)
             <iframe
               src={`https://www.youtube.com/embed/${trailerKey}?autoplay=0&controls=1`}
-              className="w-full h-full min-h-[400px]"
+              className="w-full h-full min-h-[250px] md:min-h-[400px]"
               allowFullScreen
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
             />
           ) : (
             // Backdrop with instructions
-            <div className="w-full h-full min-h-[400px] flex items-center justify-center">
+            <div className="w-full h-full min-h-[250px] md:min-h-[400px] flex items-center justify-center">
               {movieDetails?.backdrop_path && (
                 <img
                   src={`${IMAGE_BASE}original${movieDetails.backdrop_path}`}
@@ -1079,19 +1096,19 @@ const WatchPartyPage = () => {
                   className="absolute inset-0 w-full h-full object-cover opacity-30"
                 />
               )}
-              <div className="relative text-center p-6">
-                <div className="w-20 h-20 rounded-full bg-[#7C3AED]/20 flex items-center justify-center mb-4 mx-auto">
-                  <Film className="w-10 h-10 text-[#7C3AED]" />
+              <div className="relative text-center p-4 md:p-6">
+                <div className="w-16 h-16 md:w-20 md:h-20 rounded-full bg-[#7C3AED]/20 flex items-center justify-center mb-3 md:mb-4 mx-auto">
+                  <Film className="w-8 h-8 md:w-10 md:h-10 text-[#7C3AED]" />
                 </div>
-                <h3 className="text-xl font-bold mb-2">Select a Streaming Source</h3>
-                <p className="text-[#A1A1AA] mb-4 max-w-md">
+                <h3 className="text-lg md:text-xl font-bold mb-2">Select a Streaming Source</h3>
+                <p className="text-sm md:text-base text-[#A1A1AA] mb-4 max-w-md mx-auto px-2">
                   Click the source picker above to choose a streaming source, or click "Try Next" to automatically cycle through sources.
                 </p>
                 <button
                   onClick={tryNextSource}
-                  className="btn-primary flex items-center gap-2 mx-auto"
+                  className="btn-primary flex items-center gap-2 mx-auto text-sm md:text-base"
                 >
-                  <RefreshCw className="w-5 h-5" />
+                  <RefreshCw className="w-4 h-4 md:w-5 md:h-5" />
                   Try First Source
                 </button>
               </div>
@@ -1103,8 +1120,8 @@ const WatchPartyPage = () => {
             <div
               className={`absolute ${
                 isVideoFullscreen
-                  ? 'bottom-6 right-6 w-56 h-40'
-                  : 'bottom-20 right-4 w-48 h-36'
+                  ? 'bottom-6 right-4 w-40 h-32 sm:w-48 sm:h-36 md:w-56 md:h-40'
+                  : 'bottom-24 md:bottom-20 right-3 md:right-4 w-32 h-24 sm:w-40 sm:h-32 md:w-48 md:h-36'
               } rounded-lg overflow-hidden border-2 border-[#7C3AED] shadow-2xl bg-[#121212]`}
               style={{ zIndex: 2147483647 }}
             >
@@ -1151,7 +1168,7 @@ const WatchPartyPage = () => {
           {isInCall && remoteStreamEntries.length > 0 && (
             <div
               className={`absolute ${
-                isVideoFullscreen ? 'top-6 right-6' : 'top-20 right-4'
+                isVideoFullscreen ? 'top-6 right-4' : 'top-16 md:top-20 right-3 md:right-4'
               } space-y-2`}
               style={{ zIndex: 2147483647 }}
             >
@@ -1159,7 +1176,9 @@ const WatchPartyPage = () => {
                 <div
                   key={peerId}
                   className={`${
-                    isVideoFullscreen ? 'w-56 h-40' : 'w-48 h-36'
+                    isVideoFullscreen
+                      ? 'w-40 h-32 sm:w-48 sm:h-36 md:w-56 md:h-40'
+                      : 'w-32 h-24 sm:w-40 sm:h-32 md:w-48 md:h-36'
                   } rounded-lg overflow-hidden border-2 border-white/20 shadow-2xl bg-[#121212]`}
                 >
                   <video
@@ -1177,8 +1196,10 @@ const WatchPartyPage = () => {
               ))}
               {remoteStreamEntries.length > 3 && (
                 <div className={`${
-                  isVideoFullscreen ? 'w-56 h-12' : 'w-48 h-12'
-                } rounded-lg bg-black/80 flex items-center justify-center text-sm`}>
+                  isVideoFullscreen
+                    ? 'w-40 h-10 sm:w-48 sm:h-12 md:w-56 md:h-12'
+                    : 'w-32 h-10 sm:w-40 sm:h-10 md:w-48 md:h-12'
+                } rounded-lg bg-black/80 flex items-center justify-center text-xs sm:text-sm`}>
                   +{remoteStreamEntries.length - 3} more
                 </div>
               )}
@@ -1188,34 +1209,35 @@ const WatchPartyPage = () => {
           {/* Fullscreen toggle */}
           <button
             onClick={toggleFullscreen}
-            className="absolute top-4 right-4 w-10 h-10 rounded-full bg-black/50 flex items-center justify-center hover:bg-black/70 transition-all"
+            className="absolute top-3 right-3 md:top-4 md:right-4 w-9 h-9 md:w-10 md:h-10 rounded-full bg-black/50 flex items-center justify-center hover:bg-black/70 transition-all"
             style={{ zIndex: 2147483646 }}
             title={isVideoFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
           >
             {isVideoFullscreen ? (
-              <Minimize2 className="w-5 h-5" />
+              <Minimize2 className="w-4 h-4 md:w-5 md:h-5" />
             ) : (
-              <Maximize2 className="w-5 h-5" />
+              <Maximize2 className="w-4 h-4 md:w-5 md:h-5" />
             )}
           </button>
 
           {/* Current source indicator */}
           <div
-            className="absolute bottom-4 left-4 px-3 py-1.5 rounded-full bg-black/70 backdrop-blur-sm text-sm flex items-center gap-2"
+            className="absolute bottom-3 left-3 md:bottom-4 md:left-4 px-2 py-1 md:px-3 md:py-1.5 rounded-full bg-black/70 backdrop-blur-sm text-xs md:text-sm flex items-center gap-1 md:gap-2"
             style={{ zIndex: 2147483646 }}
           >
-            <Server className="w-4 h-4 text-[#7C3AED]" />
-            {selectedSource.name}
+            <Server className="w-3 h-3 md:w-4 md:h-4 text-[#7C3AED]" />
+            <span className="hidden sm:inline">{selectedSource.name}</span>
           </div>
         </div>
 
         {/* Video Call Controls Section */}
         <div className="border-t border-white/10">
           {/* Call Controls */}
-          <div className="p-4 flex items-center justify-between">
-            <div className="flex items-center gap-2 text-[#A1A1AA]">
-              <Users className="w-5 h-5" />
-              <span>{participants.length} watching</span>
+          <div className="p-3 md:p-4 flex items-center justify-between gap-2 md:gap-4">
+            <div className="flex items-center gap-1 md:gap-2 text-[#A1A1AA] text-sm md:text-base">
+              <Users className="w-4 h-4 md:w-5 md:h-5" />
+              <span className="hidden sm:inline">{participants.length} watching</span>
+              <span className="sm:hidden">{participants.length}</span>
             </div>
 
             <div className="flex items-center gap-2">
@@ -1225,41 +1247,41 @@ const WatchPartyPage = () => {
                     type="button"
                     onClick={toggleVideo}
                     data-testid="toggle-video-btn"
-                    className={`w-12 h-12 rounded-full flex items-center justify-center transition-all ${
+                    className={`w-11 h-11 md:w-12 md:h-12 rounded-full flex items-center justify-center transition-all ${
                       isVideoEnabled
                         ? "bg-white/10 hover:bg-white/20"
                         : "bg-red-500/20 text-red-500"
                     }`}
                   >
                     {isVideoEnabled ? (
-                      <Video className="w-5 h-5" />
+                      <Video className="w-4 h-4 md:w-5 md:h-5" />
                     ) : (
-                      <VideoOff className="w-5 h-5" />
+                      <VideoOff className="w-4 h-4 md:w-5 md:h-5" />
                     )}
                   </button>
                   <button
                     type="button"
                     onClick={toggleAudio}
                     data-testid="toggle-audio-btn"
-                    className={`w-12 h-12 rounded-full flex items-center justify-center transition-all ${
+                    className={`w-11 h-11 md:w-12 md:h-12 rounded-full flex items-center justify-center transition-all ${
                       isAudioEnabled
                         ? "bg-white/10 hover:bg-white/20"
                         : "bg-red-500/20 text-red-500"
                     }`}
                   >
                     {isAudioEnabled ? (
-                      <Mic className="w-5 h-5" />
+                      <Mic className="w-4 h-4 md:w-5 md:h-5" />
                     ) : (
-                      <MicOff className="w-5 h-5" />
+                      <MicOff className="w-4 h-4 md:w-5 md:h-5" />
                     )}
                   </button>
                   <button
                     type="button"
                     onClick={endCall}
                     data-testid="end-call-btn"
-                    className="w-12 h-12 rounded-full bg-red-500 flex items-center justify-center hover:bg-red-600 transition-all"
+                    className="w-11 h-11 md:w-12 md:h-12 rounded-full bg-red-500 flex items-center justify-center hover:bg-red-600 transition-all"
                   >
-                    <PhoneOff className="w-5 h-5" />
+                    <PhoneOff className="w-4 h-4 md:w-5 md:h-5" />
                   </button>
                 </>
               ) : (
@@ -1267,15 +1289,16 @@ const WatchPartyPage = () => {
                   type="button"
                   onClick={startCall}
                   data-testid="start-call-btn"
-                  className="btn-primary flex items-center gap-2"
+                  className="btn-primary flex items-center gap-2 px-3 py-2 md:px-4 md:py-2 text-sm"
                 >
-                  <Video className="w-5 h-5" />
-                  Join Video Call
+                  <Video className="w-4 h-4 md:w-5 md:h-5" />
+                  <span className="hidden sm:inline">Join Video Call</span>
+                  <span className="sm:hidden">Join</span>
                 </button>
               )}
             </div>
 
-            <div className="flex -space-x-2">
+            <div className="hidden sm:flex -space-x-2">
               {participants.slice(0, 5).map((p, i) => (
                 <div
                   key={i}
@@ -1294,16 +1317,30 @@ const WatchPartyPage = () => {
         </div>
       </div>
 
-      {/* Chat Section */}
-      <div className="border-l border-white/10 flex flex-col h-screen lg:h-auto">
-        <div className="p-4 border-b border-white/10">
+      {/* Chat Section - Desktop Sidebar / Mobile Overlay */}
+      <div
+        className={`
+          fixed lg:static inset-0 lg:border-l lg:border-white/10 flex flex-col
+          bg-[#050505] lg:bg-transparent z-[60] transition-transform duration-300
+          ${isChatOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'}
+          lg:w-[380px]
+        `}
+      >
+        {/* Chat Header */}
+        <div className="p-4 border-b border-white/10 flex items-center justify-between">
           <h3 className="font-semibold">Chat</h3>
+          <button
+            onClick={() => setIsChatOpen(false)}
+            className="lg:hidden w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 transition-all flex items-center justify-center"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
 
         {/* Messages */}
         <div
           ref={chatRef}
-          className="flex-1 overflow-y-auto p-4 space-y-4 max-h-[400px] lg:max-h-none"
+          className="flex-1 overflow-y-auto p-4 space-y-4"
         >
           {messages.length === 0 ? (
             <div className="text-center text-[#A1A1AA] py-8">
@@ -1317,17 +1354,17 @@ const WatchPartyPage = () => {
                   <div className="w-8 h-8 rounded-full bg-[#7C3AED] flex items-center justify-center text-sm font-semibold flex-shrink-0">
                     {msg.user_name?.charAt(0).toUpperCase()}
                   </div>
-                  <div>
+                  <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="font-medium text-sm">{msg.user_name}</span>
-                      <span className="text-xs text-[#52525B]">
+                      <span className="font-medium text-sm truncate">{msg.user_name}</span>
+                      <span className="text-xs text-[#52525B] flex-shrink-0">
                         {new Date(msg.timestamp).toLocaleTimeString([], {
                           hour: "2-digit",
                           minute: "2-digit",
                         })}
                       </span>
                     </div>
-                    <p className="text-sm text-[#A1A1AA] mt-1">{msg.message}</p>
+                    <p className="text-sm text-[#A1A1AA] mt-1 break-words">{msg.message}</p>
                   </div>
                 </div>
               </div>
@@ -1350,12 +1387,20 @@ const WatchPartyPage = () => {
           <Button
             type="submit"
             data-testid="send-message-btn"
-            className="bg-[#7C3AED] hover:bg-[#8B5CF6]"
+            className="bg-[#7C3AED] hover:bg-[#8B5CF6] flex-shrink-0"
           >
             <Send className="w-4 h-4" />
           </Button>
         </form>
       </div>
+
+      {/* Mobile Chat Overlay Backdrop */}
+      {isChatOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-[59] lg:hidden"
+          onClick={() => setIsChatOpen(false)}
+        />
+      )}
     </div>
   );
 };
