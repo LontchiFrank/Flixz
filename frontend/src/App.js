@@ -55,28 +55,48 @@ const AuthCallback = () => {
 				"session_id"
 			);
 
+			console.log("OAuth: Processing session, hash:", hash);
+			console.log("OAuth: Session ID:", sessionId);
+
 			if (sessionId) {
 				try {
+					console.log("OAuth: Fetching user session...");
 					const response = await axios.get(`${API}/auth/session`, {
 						headers: { "X-Session-ID": sessionId },
 						withCredentials: true,
 					});
+					console.log("OAuth: User data received:", response.data);
+
 					// Store session_token from cookie or response
 					const sessionToken = document.cookie
 						.split('; ')
 						.find(row => row.startsWith('session_token='))
 						?.split('=')[1];
 
+					console.log("OAuth: Session token from cookie:", sessionToken ? "YES" : "NO");
+
+					// Save to auth context and localStorage
 					login(response.data, sessionToken || null);
+
+					// Verify saved to localStorage
+					console.log("OAuth: Checking localStorage after login...");
+					console.log("OAuth: flixz_user in localStorage:", localStorage.getItem("flixz_user") ? "YES" : "NO");
+					console.log("OAuth: flixz_token in localStorage:", localStorage.getItem("flixz_token") ? "YES" : "NO");
+
+					// Small delay to ensure state updates
+					await new Promise(resolve => setTimeout(resolve, 100));
+
 					navigate("/browse", {
 						replace: true,
 						state: { user: response.data },
 					});
+					console.log("OAuth: Navigated to /browse");
 				} catch (error) {
-					console.error("Auth failed:", error);
+					console.error("OAuth: Auth failed:", error);
 					navigate("/login", { replace: true });
 				}
 			} else {
+				console.log("OAuth: No session ID found, redirecting to login");
 				navigate("/login", { replace: true });
 			}
 		};

@@ -56,12 +56,23 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   const login = useCallback((userData, accessToken) => {
-    console.log("AuthProvider.login called with:", userData.email);
+    console.log("AuthProvider.login called with:", userData.email, "Token:", accessToken ? "YES" : "NO");
+
+    // Save user data
     setUser(userData);
-    setToken(accessToken);
     localStorage.setItem("flixz_user", JSON.stringify(userData));
+    console.log("AuthProvider: User saved to state and localStorage");
+
+    // Save token if provided (for OAuth, token might be in cookies instead)
     if (accessToken) {
+      setToken(accessToken);
       localStorage.setItem("flixz_token", accessToken);
+      console.log("AuthProvider: Token saved to state and localStorage");
+    } else {
+      // For OAuth, token is in cookies, but we still set a placeholder
+      setToken("oauth_cookie");
+      localStorage.setItem("flixz_token", "oauth_cookie");
+      console.log("AuthProvider: OAuth mode - token stored as 'oauth_cookie'");
     }
   }, []);
 
@@ -109,9 +120,11 @@ export const AuthProvider = ({ children }) => {
   }, [token]);
 
   const getAuthHeaders = useCallback(() => {
-    if (token) {
+    // For OAuth users, token is "oauth_cookie" which means auth is via cookies
+    if (token && token !== "oauth_cookie") {
       return { Authorization: `Bearer ${token}` };
     }
+    // For OAuth or no token, rely on cookies (withCredentials: true in axios calls)
     return {};
   }, [token]);
 
