@@ -19,15 +19,15 @@ export const AuthProvider = ({ children }) => {
   });
   const [loading, setLoading] = useState(false);
 
-  // Sync user state with localStorage on mount and when storage changes
+  // Restore user from localStorage on mount if state is empty
   useEffect(() => {
-    const syncUserFromStorage = () => {
+    // Only run on initial mount, not on every user state change
+    if (!user) {
       const storedUser = localStorage.getItem("flixz_user");
       const storedToken = localStorage.getItem("flixz_token");
 
-      // If localStorage has user but state doesn't, restore it
-      if (storedUser && storedToken && !user) {
-        console.log("AuthProvider: Restoring user from localStorage");
+      if (storedUser && storedToken) {
+        console.log("AuthProvider: Restoring user from localStorage on mount");
         try {
           const parsedUser = JSON.parse(storedUser);
           setUser(parsedUser);
@@ -38,21 +38,22 @@ export const AuthProvider = ({ children }) => {
           localStorage.removeItem("flixz_token");
         }
       }
+    }
+  }, []); // Empty dependency array - only run once on mount
 
-      // If state has user but localStorage doesn't, clear state
-      if (user && (!storedUser || !storedToken)) {
-        console.log("AuthProvider: localStorage cleared, clearing user state");
+  // Listen for storage events in other tabs (logout in another tab)
+  useEffect(() => {
+    const handleStorageChange = (e) => {
+      if (e.key === "flixz_user" && !e.newValue) {
+        console.log("AuthProvider: User cleared in another tab");
         setUser(null);
         setToken(null);
       }
     };
 
-    syncUserFromStorage();
-
-    // Listen for storage events (e.g., user logs out in another tab)
-    window.addEventListener('storage', syncUserFromStorage);
-    return () => window.removeEventListener('storage', syncUserFromStorage);
-  }, [user]);
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
 
   const login = useCallback((userData, accessToken) => {
     console.log("AuthProvider.login called with:", userData.email);
