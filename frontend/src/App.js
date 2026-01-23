@@ -24,6 +24,7 @@ import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import ProfilePage from "./pages/ProfilePage";
 import CustomContentPage from "./pages/CustomContentPage";
+import YouTubePage from "./pages/YouTubePage";
 
 // Components
 import Sidebar from "./components/layout/Sidebar";
@@ -206,6 +207,7 @@ const AppRouter = () => {
 					<Route path="/tv/:id" element={<DetailPage type="tv" />} />
 					<Route path="/watch/:type/:id" element={<WatchPage />} />
 					<Route path="/search" element={<SearchPage />} />
+					<Route path="/youtube" element={<YouTubePage />} />
 					<Route
 						path="/my-list"
 						element={

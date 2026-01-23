@@ -18,6 +18,7 @@ import {
   Server,
   RefreshCw,
   AlertCircle,
+  Download,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { API } from "../App";
@@ -286,6 +287,31 @@ const WatchPage = () => {
     toast.success(`Switched to ${source.name}`);
   };
 
+  const downloadVideo = async () => {
+    if (!isCustomContent || !customVideoUrl) {
+      toast.error("Downloads are only available for custom uploaded content");
+      return;
+    }
+
+    try {
+      toast.info("Starting download...");
+      const response = await fetch(customVideoUrl);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${title || 'video'}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      toast.success("Download started!");
+    } catch (error) {
+      console.error("Download failed:", error);
+      toast.error("Failed to download video");
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-[#050505] flex items-center justify-center">
@@ -402,25 +428,41 @@ const WatchPage = () => {
                 )}
               </div>
 
-              {/* Source Selector */}
+              {/* Source Selector & Download */}
               {!isFullscreen && (
                 <div className="flex items-center gap-2">
-                  <button
-                    onClick={tryNextSource}
-                    data-testid="try-next-source-btn"
-                    className="flex items-center gap-2 px-4 py-2 rounded-full bg-[#7C3AED]/20 text-[#7C3AED] hover:bg-[#7C3AED]/30 transition-all"
-                  >
-                    <RefreshCw className="w-4 h-4" />
-                    <span className="text-sm">Try Next</span>
-                  </button>
-                  <button
-                    onClick={() => setShowSourcePicker(!showSourcePicker)}
-                    data-testid="source-picker-btn"
-                    className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/10 backdrop-blur-md hover:bg-white/20 transition-all"
-                  >
-                    <Server className="w-4 h-4" />
-                    <span className="text-sm">{selectedSource.name}</span>
-                  </button>
+                  {/* Download button for custom content only */}
+                  {isCustomContent && customVideoUrl && (
+                    <button
+                      onClick={downloadVideo}
+                      data-testid="download-btn"
+                      className="flex items-center gap-2 px-4 py-2 rounded-full bg-green-500/20 text-green-400 hover:bg-green-500/30 transition-all"
+                      title="Download video"
+                    >
+                      <Download className="w-4 h-4" />
+                      <span className="text-sm hidden md:inline">Download</span>
+                    </button>
+                  )}
+                  {!isCustomContent && (
+                    <>
+                      <button
+                        onClick={tryNextSource}
+                        data-testid="try-next-source-btn"
+                        className="flex items-center gap-2 px-4 py-2 rounded-full bg-[#7C3AED]/20 text-[#7C3AED] hover:bg-[#7C3AED]/30 transition-all"
+                      >
+                        <RefreshCw className="w-4 h-4" />
+                        <span className="text-sm">Try Next</span>
+                      </button>
+                      <button
+                        onClick={() => setShowSourcePicker(!showSourcePicker)}
+                        data-testid="source-picker-btn"
+                        className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/10 backdrop-blur-md hover:bg-white/20 transition-all"
+                      >
+                        <Server className="w-4 h-4" />
+                        <span className="text-sm">{selectedSource.name}</span>
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
             </div>

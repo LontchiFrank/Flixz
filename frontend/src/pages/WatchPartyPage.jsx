@@ -25,6 +25,8 @@ import {
 	Link2,
 	Server,
 	Monitor,
+	MonitorUp,
+	MonitorStop,
 	Film,
 	RefreshCw,
 } from "lucide-react";
@@ -126,6 +128,8 @@ const WatchPartyPage = () => {
 	const [isVideoEnabled, setIsVideoEnabled] = useState(true);
 	const [isAudioEnabled, setIsAudioEnabled] = useState(true);
 	const [isVideoFullscreen, setIsVideoFullscreen] = useState(false);
+	const [isSharingScreen, setIsSharingScreen] = useState(false);
+	const [screenStream, setScreenStream] = useState(null);
 
 	// Invite state
 	const [inviteEmail, setInviteEmail] = useState("");
@@ -297,6 +301,13 @@ const WatchPartyPage = () => {
 			setLocalStream(null);
 		}
 
+		// Stop screen share if active
+		if (screenStream) {
+			screenStream.getTracks().forEach((track) => track.stop());
+			setScreenStream(null);
+			setIsSharingScreen(false);
+		}
+
 		// Close peer connections
 		Object.values(peerConnectionsRef.current).forEach((pc) => pc.close());
 		peerConnectionsRef.current = {};
@@ -307,7 +318,7 @@ const WatchPartyPage = () => {
 
 		// Notify server
 		socketRef.current?.emit("webrtc_leave", { room_id: roomId });
-	}, [localStream, roomId]);
+	}, [localStream, screenStream, roomId]);
 
 	const fetchParties = useCallback(async () => {
 		setLoading(true);
@@ -871,6 +882,64 @@ const WatchPartyPage = () => {
 				});
 			}
 		}
+	};
+
+	const startScreenShare = async () => {
+		try {
+			const stream = await navigator.mediaDevices.getDisplayMedia({
+				video: {
+					cursor: "always"
+				},
+				audio: true
+			});
+
+			setScreenStream(stream);
+			setIsSharingScreen(true);
+
+			// Replace video track in all peer connections
+			const videoTrack = stream.getVideoTracks()[0];
+			Object.values(peerConnectionsRef.current).forEach((pc) => {
+				const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+				if (sender) {
+					sender.replaceTrack(videoTrack);
+				}
+			});
+
+			// Handle screen share stop
+			videoTrack.onended = () => {
+				stopScreenShare();
+			};
+
+			toast.success("Screen sharing started");
+		} catch (error) {
+			console.error("Failed to start screen share:", error);
+			if (error.name === "NotAllowedError") {
+				toast.error("Screen sharing permission denied");
+			} else {
+				toast.error("Failed to start screen sharing");
+			}
+		}
+	};
+
+	const stopScreenShare = () => {
+		if (screenStream) {
+			screenStream.getTracks().forEach(track => track.stop());
+			setScreenStream(null);
+		}
+		setIsSharingScreen(false);
+
+		// Restore camera video track in all peer connections
+		if (localStream) {
+			const videoTrack = localStream.getVideoTracks()[0];
+			Object.values(peerConnectionsRef.current).forEach((pc) => {
+				const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+				if (sender && videoTrack) {
+					sender.replaceTrack(videoTrack);
+				}
+			});
+		}
+
+		toast.info("Screen sharing stopped");
 	};
 
 	const toggleFullscreen = async () => {
@@ -1720,6 +1789,22 @@ const WatchPartyPage = () => {
 											<Mic className="w-4 h-4 md:w-5 md:h-5" />
 										) : (
 											<MicOff className="w-4 h-4 md:w-5 md:h-5" />
+										)}
+									</button>
+									<button
+										type="button"
+										onClick={isSharingScreen ? stopScreenShare : startScreenShare}
+										data-testid="screen-share-btn"
+										className={`w-11 h-11 md:w-12 md:h-12 rounded-full flex items-center justify-center transition-all ${
+											isSharingScreen
+												? "bg-green-500/20 text-green-400"
+												: "bg-white/10 hover:bg-white/20"
+										}`}
+										title={isSharingScreen ? "Stop sharing screen" : "Share screen"}>
+										{isSharingScreen ? (
+											<MonitorStop className="w-4 h-4 md:w-5 md:h-5" />
+										) : (
+											<MonitorUp className="w-4 h-4 md:w-5 md:h-5" />
 										)}
 									</button>
 									<button

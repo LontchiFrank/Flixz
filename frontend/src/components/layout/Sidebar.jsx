@@ -14,6 +14,7 @@ import {
 	LogIn,
 	Sparkles,
 	Upload,
+	Youtube,
 } from "lucide-react";
 
 const Sidebar = () => {
@@ -30,6 +31,7 @@ const Sidebar = () => {
 		{ icon: Film, label: "Movies", path: "/browse/movies" },
 		{ icon: Tv, label: "TV Shows", path: "/browse/tv" },
 		{ icon: Search, label: "Search", path: "/search" },
+		{ icon: Youtube, label: "YouTube", path: "/youtube" },
 		{ icon: Heart, label: "My List", path: "/my-list", auth: true },
 		{ icon: Upload, label: "My Uploads", path: "/my-uploads", auth: true },
 		{ icon: Users, label: "Watch Party", path: "/watch-party", auth: true },

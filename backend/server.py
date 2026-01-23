@@ -741,12 +741,27 @@ async def chat_message(sid, data):
     room_id = data.get('room_id')
     message = data.get('message')
     user_name = data.get('user_name', 'Anonymous')
-    
+
     await sio.emit('new_message', {
         'user_name': user_name,
         'message': message,
         'timestamp': datetime.now(timezone.utc).isoformat()
     }, room=room_id)
+
+@sio.event
+async def youtube_video_change(sid, data):
+    """Handle YouTube video changes in rooms"""
+    room_id = data.get('room_id')
+    video_id = data.get('video_id')
+    user_name = data.get('user_name', 'Anonymous')
+
+    # Broadcast video change to all participants except sender
+    await sio.emit('youtube_video_change', {
+        'video_id': video_id,
+        'user_name': user_name
+    }, room=room_id, skip_sid=sid)
+
+    logger.info(f"YouTube video changed in room {room_id} by {user_name} to {video_id}")
 
 @sio.event
 async def delete_party(sid, data):
