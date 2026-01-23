@@ -40,8 +40,7 @@ import {
 	DialogTrigger,
 } from "../components/ui/dialog";
 
-const BACKEND_URL =
-	process.env.REACT_APP_BACKEND_URL || "https://flixz.onrender.com";
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const IMAGE_BASE = "https://image.tmdb.org/t/p/";
 
 // Streaming sources for embedded players - ordered by reliability and minimal ads
@@ -146,23 +145,49 @@ const WatchPartyPage = () => {
 	const localVideoRef = useRef(null);
 	const peerConnectionsRef = useRef({});
 	const videoPlayerRef = useRef(null);
+	const localStreamRef = useRef(null); // Keep stream in ref for stable access
+	const pendingCandidatesRef = useRef({}); // Store ICE candidates before connection ready
 
-	// WebRTC Functions
+	// Keep localStreamRef in sync with localStream state
+	useEffect(() => {
+		localStreamRef.current = localStream;
+	}, [localStream]);
+
+	// WebRTC Functions - Fixed for two-way video
 	const createPeerConnection = useCallback(
 		async (peerId, createOffer = false) => {
+			// Don't create duplicate connections
+			if (peerConnectionsRef.current[peerId]) {
+				console.log("⚠️ Peer connection already exists for:", peerId);
+				return peerConnectionsRef.current[peerId];
+			}
+
+			console.log(
+				"🔗 Creating peer connection for:",
+				peerId,
+				"createOffer:",
+				createOffer
+			);
 			const pc = new RTCPeerConnection(RTC_CONFIG);
 			peerConnectionsRef.current[peerId] = pc;
 
-			// Add local tracks
-			if (localStream) {
-				localStream.getTracks().forEach((track) => {
-					pc.addTrack(track, localStream);
+			// Add local tracks using ref for stable access
+			const stream = localStreamRef.current;
+			if (stream) {
+				console.log("📹 Adding local tracks to peer connection");
+				stream.getTracks().forEach((track) => {
+					pc.addTrack(track, stream);
 				});
+			} else {
+				console.warn(
+					"⚠️ No local stream available when creating peer connection"
+				);
 			}
 
 			// Handle ICE candidates
 			pc.onicecandidate = (event) => {
 				if (event.candidate) {
+					console.log("🧊 Sending ICE candidate to:", peerId);
 					socketRef.current?.emit("webrtc_ice_candidate", {
 						target: peerId,
 						candidate: event.candidate,
@@ -170,44 +195,94 @@ const WatchPartyPage = () => {
 				}
 			};
 
-			// Handle remote stream
-			pc.ontrack = (event) => {
-				console.log("Received remote track from:", peerId);
-				setRemoteStreams((prev) => ({
-					...prev,
-					[peerId]: event.streams[0],
-				}));
+			// Handle connection state changes
+			pc.onconnectionstatechange = () => {
+				console.log(`🔌 Connection state with ${peerId}:`, pc.connectionState);
+				if (
+					pc.connectionState === "failed" ||
+					pc.connectionState === "disconnected"
+				) {
+					console.log("🔄 Connection failed/disconnected, cleaning up");
+				}
 			};
 
+			// Handle ICE connection state
+			pc.oniceconnectionstatechange = () => {
+				console.log(`🧊 ICE state with ${peerId}:`, pc.iceConnectionState);
+			};
+
+			// Handle remote stream - THIS IS KEY FOR TWO-WAY VIDEO
+			pc.ontrack = (event) => {
+				console.log(
+					"📺 Received remote track from:",
+					peerId,
+					"streams:",
+					event.streams.length
+				);
+				if (event.streams && event.streams[0]) {
+					setRemoteStreams((prev) => ({
+						...prev,
+						[peerId]: event.streams[0],
+					}));
+				}
+			};
+
+			// Process any pending ICE candidates
+			if (pendingCandidatesRef.current[peerId]) {
+				console.log("📥 Processing pending ICE candidates for:", peerId);
+				for (const candidate of pendingCandidatesRef.current[peerId]) {
+					await pc.addIceCandidate(new RTCIceCandidate(candidate));
+				}
+				delete pendingCandidatesRef.current[peerId];
+			}
+
 			if (createOffer) {
-				const offer = await pc.createOffer();
-				await pc.setLocalDescription(offer);
-				socketRef.current?.emit("webrtc_offer", {
-					target: peerId,
-					offer: offer,
-				});
+				try {
+					console.log("📤 Creating offer for:", peerId);
+					const offer = await pc.createOffer({
+						offerToReceiveAudio: true,
+						offerToReceiveVideo: true,
+					});
+					await pc.setLocalDescription(offer);
+					socketRef.current?.emit("webrtc_offer", {
+						target: peerId,
+						offer: offer,
+					});
+					console.log("✅ Offer sent to:", peerId);
+				} catch (err) {
+					console.error("❌ Failed to create offer:", err);
+				}
 			}
 
 			return pc;
 		},
-		[localStream]
+		[] // Remove localStream dependency - use ref instead
 	);
 
 	const handleOffer = useCallback(
 		async (from, offer) => {
+			console.log("📨 Processing offer from:", from);
 			let pc = peerConnectionsRef.current[from];
+
 			if (!pc) {
 				pc = await createPeerConnection(from, false);
 			}
 
-			await pc.setRemoteDescription(new RTCSessionDescription(offer));
-			const answer = await pc.createAnswer();
-			await pc.setLocalDescription(answer);
+			try {
+				await pc.setRemoteDescription(new RTCSessionDescription(offer));
+				console.log("📝 Set remote description from:", from);
 
-			socketRef.current?.emit("webrtc_answer", {
-				target: from,
-				answer: answer,
-			});
+				const answer = await pc.createAnswer();
+				await pc.setLocalDescription(answer);
+
+				socketRef.current?.emit("webrtc_answer", {
+					target: from,
+					answer: answer,
+				});
+				console.log("✅ Answer sent to:", from);
+			} catch (err) {
+				console.error("❌ Failed to handle offer:", err);
+			}
 		},
 		[createPeerConnection]
 	);
@@ -354,13 +429,16 @@ const WatchPartyPage = () => {
 	}, [roomId, user, token, getAuthHeaders, navigate]);
 
 	const connectSocket = useCallback(() => {
+		console.log("🔌 Connecting Socket.IO to:", BACKEND_URL);
 		socketRef.current = io(BACKEND_URL, {
 			transports: ["websocket", "polling"],
 			reconnectionAttempts: 5,
 			reconnectionDelay: 1000,
+			withCredentials: true,
 		});
 
 		socketRef.current.on("connect", () => {
+			console.log("✅ Socket connected! ID:", socketRef.current.id);
 			socketRef.current.emit("join_room", {
 				room_id: roomId,
 				user_name: user?.name || "Anonymous",
@@ -368,11 +446,12 @@ const WatchPartyPage = () => {
 		});
 
 		socketRef.current.on("connect_error", (error) => {
-			console.error("Socket connection error:", error);
+			console.error("❌ Socket connection error:", error.message);
 			toast.error("Failed to connect to watch party server");
 		});
 
 		socketRef.current.on("disconnect", (reason) => {
+			console.log("🔌 Socket disconnected:", reason);
 			if (reason === "io server disconnect") {
 				socketRef.current.connect();
 			}
@@ -425,46 +504,35 @@ const WatchPartyPage = () => {
 		});
 
 		// WebRTC signaling events
+		// Handle existing peers list when joining - NEW JOINER receives this
+		// The NEW JOINER should NOT create offers - they wait for existing peers to send offers
 		socketRef.current.on("webrtc_peers", async (data) => {
-			console.log("Existing peers:", data.peers);
+			console.log(
+				"📋 Received existing peers list:",
+				data.peers.length,
+				"peers"
+			);
+			// Don't create offers here - existing peers will send us offers via webrtc_peer_joined
+			// Just log that we're expecting offers from these peers
 			for (const peer of data.peers) {
-				await createPeerConnection(peer.sid, true);
+				console.log(
+					"⏳ Expecting offer from existing peer:",
+					peer.user_name,
+					peer.sid
+				);
 			}
 		});
 
-		socketRef.current.on("webrtc_peer_joined", async (data) => {
-			console.log("New peer joined:", data);
-			toast.info(`${data.user_name} joined video call`);
-		});
-
-		socketRef.current.on("webrtc_peer_left", (data) => {
-			console.log("Peer left:", data.sid);
-			if (peerConnectionsRef.current[data.sid]) {
-				peerConnectionsRef.current[data.sid].close();
-				delete peerConnectionsRef.current[data.sid];
-			}
-			setRemoteStreams((prev) => {
-				const updated = { ...prev };
-				delete updated[data.sid];
-				return updated;
-			});
-		});
-
-		// Handle existing peers list when joining
-		socketRef.current.on("webrtc_peers", async (data) => {
-			console.log("📋 Received existing peers:", data.peers);
-			// Create peer connections with all existing peers
-			for (const peer of data.peers) {
-				console.log("🤝 Creating peer connection with:", peer.user_name);
-				await createPeerConnection(peer.sid, true); // true = create offer
-			}
-		});
-
-		// Handle new peer joining
+		// Handle new peer joining - EXISTING PEERS create offers to the NEW PEER
 		socketRef.current.on("webrtc_peer_joined", async (data) => {
 			console.log("👋 New peer joined:", data.user_name, "sid:", data.sid);
 			toast.info(`${data.user_name} joined the video call`);
-			// Don't create offer - the new peer will send one to us
+
+			// If we're in a call, create an offer to the new peer so they can see us
+			if (localStreamRef.current) {
+				console.log("📤 Creating offer for new peer:", data.user_name);
+				await createPeerConnection(data.sid, true); // true = create offer
+			}
 		});
 
 		socketRef.current.on("webrtc_offer", async (data) => {
@@ -500,7 +568,19 @@ const WatchPartyPage = () => {
 		socketRef.current.on("webrtc_ice_candidate", async (data) => {
 			const pc = peerConnectionsRef.current[data.from];
 			if (pc && data.candidate) {
-				await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+				try {
+					await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+					console.log("🧊 Added ICE candidate from:", data.from);
+				} catch (err) {
+					console.error("❌ Failed to add ICE candidate:", err);
+				}
+			} else if (data.candidate) {
+				// Store candidate for later if peer connection doesn't exist yet
+				if (!pendingCandidatesRef.current[data.from]) {
+					pendingCandidatesRef.current[data.from] = [];
+				}
+				pendingCandidatesRef.current[data.from].push(data.candidate);
+				console.log("📦 Stored pending ICE candidate from:", data.from);
 			}
 		});
 
@@ -573,8 +653,13 @@ const WatchPartyPage = () => {
 				audio: true,
 			});
 
+			// IMPORTANT: Set ref immediately before state (ref is synchronous)
+			localStreamRef.current = stream;
 			setLocalStream(stream);
 			setIsInCall(true);
+
+			// Small delay to ensure state is propagated
+			await new Promise((resolve) => setTimeout(resolve, 100));
 
 			// Join WebRTC room
 			socketRef.current?.emit("webrtc_join", {
@@ -1373,8 +1458,17 @@ const WatchPartyPage = () => {
 									<video
 										autoPlay
 										playsInline
+										muted={false}
 										ref={(el) => {
-											if (el) el.srcObject = stream;
+											if (el && stream) {
+												// Only set if different to avoid re-renders
+												if (el.srcObject !== stream) {
+													el.srcObject = stream;
+													el.play().catch((err) => {
+														console.log("Remote video play error:", err.name);
+													});
+												}
+											}
 										}}
 										className="w-full h-full object-cover"
 									/>

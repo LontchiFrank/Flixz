@@ -69,22 +69,31 @@ const AuthCallback = () => {
 
 					// Store session_token from cookie or response
 					const sessionToken = document.cookie
-						.split('; ')
-						.find(row => row.startsWith('session_token='))
-						?.split('=')[1];
+						.split("; ")
+						.find((row) => row.startsWith("session_token="))
+						?.split("=")[1];
 
-					console.log("OAuth: Session token from cookie:", sessionToken ? "YES" : "NO");
+					console.log(
+						"OAuth: Session token from cookie:",
+						sessionToken ? "YES" : "NO"
+					);
 
 					// Save to auth context and localStorage
 					login(response.data, sessionToken || null);
 
 					// Verify saved to localStorage
 					console.log("OAuth: Checking localStorage after login...");
-					console.log("OAuth: flixz_user in localStorage:", localStorage.getItem("flixz_user") ? "YES" : "NO");
-					console.log("OAuth: flixz_token in localStorage:", localStorage.getItem("flixz_token") ? "YES" : "NO");
+					console.log(
+						"OAuth: flixz_user in localStorage:",
+						localStorage.getItem("flixz_user") ? "YES" : "NO"
+					);
+					console.log(
+						"OAuth: flixz_token in localStorage:",
+						localStorage.getItem("flixz_token") ? "YES" : "NO"
+					);
 
 					// Small delay to ensure state updates
-					await new Promise(resolve => setTimeout(resolve, 100));
+					await new Promise((resolve) => setTimeout(resolve, 100));
 
 					navigate("/browse", {
 						replace: true,
@@ -130,14 +139,18 @@ const ProtectedRoute = ({ children }) => {
 		const storedToken = localStorage.getItem("flixz_token");
 
 		if (storedUser && storedToken) {
-			console.log("ProtectedRoute: User found in localStorage, skipping auth check");
+			console.log(
+				"ProtectedRoute: User found in localStorage, skipping auth check"
+			);
 			setIsChecking(false);
 			return;
 		}
 
 		// If user exists in context, skip auth check
 		if (user) {
-			console.log("ProtectedRoute: User exists in context, skipping auth check");
+			console.log(
+				"ProtectedRoute: User exists in context, skipping auth check"
+			);
 			setIsChecking(false);
 			return;
 		}
@@ -158,7 +171,12 @@ const ProtectedRoute = ({ children }) => {
 	if (!user) {
 		console.log("ProtectedRoute: No user, redirecting to login");
 		// Redirect to login with intended destination
-		return <Navigate to={`/login?redirect=${encodeURIComponent(location.pathname)}`} replace />;
+		return (
+			<Navigate
+				to={`/login?redirect=${encodeURIComponent(location.pathname)}`}
+				replace
+			/>
+		);
 	}
 
 	console.log("ProtectedRoute: User authenticated, rendering children");
