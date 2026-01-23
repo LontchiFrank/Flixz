@@ -147,6 +147,9 @@ const WatchPartyPage = () => {
 	const videoPlayerRef = useRef(null);
 	const localStreamRef = useRef(null); // Keep stream in ref for stable access
 	const pendingCandidatesRef = useRef({}); // Store ICE candidates before connection ready
+	const playbackStartTimeRef = useRef(null); // Track when playback started
+	const lastSyncTimeRef = useRef(0); // Track last manual sync to avoid duplicate broadcasts
+	const isSyncingRef = useRef(false); // Prevent sync loops
 
 	// Keep localStreamRef in sync with localStream state
 	useEffect(() => {
@@ -467,10 +470,62 @@ const WatchPartyPage = () => {
 			setParticipants((prev) => prev.filter((p) => p.name !== data.user_name));
 		});
 
-		socketRef.current.on("playback_sync", (data) => {
-			console.log("📺 Playback sync received:", data);
+		// Initial sync when joining - receive current playback state
+		socketRef.current.on("initial_sync", (data) => {
+			console.log("🎬 Received initial sync:", data);
+			isSyncingRef.current = true;
+
 			setIsPlaying(data.is_playing);
 			setCurrentTime(data.current_time);
+
+			if (data.is_playing) {
+				playbackStartTimeRef.current = Date.now();
+				toast.success("Synced to current playback position");
+			}
+
+			// Sync source if provided
+			if (data.source) {
+				const sourceIndex = STREAMING_SOURCES.findIndex(
+					(s) => s.id === data.source
+				);
+				if (sourceIndex !== -1) {
+					setSelectedSource(STREAMING_SOURCES[sourceIndex]);
+					setCurrentSourceIndex(sourceIndex);
+				}
+			}
+
+			setTimeout(() => {
+				isSyncingRef.current = false;
+			}, 500);
+		});
+
+		socketRef.current.on("playback_sync", (data) => {
+			console.log("📺 Playback sync received:", data);
+
+			// Set syncing flag to prevent sync loops
+			isSyncingRef.current = true;
+
+			// Calculate drift if we're playing
+			if (isPlaying && data.is_playing) {
+				const drift = Math.abs(currentTime - data.current_time);
+				if (drift > 3) {
+					console.log(`⏰ Drift detected: ${drift.toFixed(1)}s - correcting`);
+					toast.info(
+						`Syncing playback (${drift.toFixed(1)}s difference)`,
+						{ duration: 2000 }
+					);
+				}
+			}
+
+			setIsPlaying(data.is_playing);
+			setCurrentTime(data.current_time);
+
+			// Reset playback start time when receiving sync
+			if (data.is_playing) {
+				playbackStartTimeRef.current = Date.now();
+			} else {
+				playbackStartTimeRef.current = null;
+			}
 
 			// Sync source if provided
 			if (data.source) {
@@ -496,6 +551,34 @@ const WatchPartyPage = () => {
 					? "▶️ resumed playback"
 					: "⏸️ paused playback";
 				toast.info(`${data.user_name} ${action}`, { duration: 2000 });
+			}
+
+			// Clear syncing flag after a short delay
+			setTimeout(() => {
+				isSyncingRef.current = false;
+			}, 500);
+		});
+
+		// Position update event - continuous sync from host
+		socketRef.current.on("position_update", (data) => {
+			// Only non-hosts should sync to position updates
+			const isHost =
+				currentParty?.host_id === user?.user_id ||
+				currentParty?.host_name === user?.name;
+
+			if (!isHost && data.is_playing && isPlaying) {
+				const drift = Math.abs(currentTime - data.current_time);
+
+				// Only correct if drift is significant (>2 seconds)
+				if (drift > 2) {
+					console.log(`🔄 Auto-correcting drift: ${drift.toFixed(1)}s`);
+					isSyncingRef.current = true;
+					setCurrentTime(data.current_time);
+					playbackStartTimeRef.current = Date.now();
+					setTimeout(() => {
+						isSyncingRef.current = false;
+					}, 500);
+				}
 			}
 		});
 
@@ -642,6 +725,74 @@ const WatchPartyPage = () => {
 			}
 		};
 	}, [localStream, isInCall]);
+
+	// Continuous position tracking - broadcasts position every 2 seconds when playing
+	useEffect(() => {
+		if (!isPlaying || !socketRef.current || !currentParty || isSyncingRef.current) {
+			playbackStartTimeRef.current = null;
+			return;
+		}
+
+		// Set the start time when playback begins
+		if (!playbackStartTimeRef.current) {
+			playbackStartTimeRef.current = Date.now();
+		}
+
+		const interval = setInterval(() => {
+			// Calculate elapsed time since playback started
+			const elapsedSeconds =
+				(Date.now() - playbackStartTimeRef.current) / 1000;
+			const estimatedTime = currentTime + elapsedSeconds;
+
+			// Only broadcast if we're the host (to reduce network traffic)
+			// Other participants will sync to the host's broadcasts
+			const isHost =
+				currentParty?.host_id === user?.user_id ||
+				currentParty?.host_name === user?.name;
+
+			if (isHost && socketRef.current) {
+				socketRef.current.emit("position_update", {
+					room_id: roomId,
+					current_time: estimatedTime,
+					is_playing: true,
+					user_name: user?.name,
+				});
+			}
+		}, 2000); // Broadcast every 2 seconds
+
+		return () => clearInterval(interval);
+	}, [isPlaying, currentTime, roomId, currentParty, user]);
+
+	// Seek detection - detects when user seeks and broadcasts the new position
+	useEffect(() => {
+		// Skip if we're currently syncing from remote
+		if (isSyncingRef.current) return;
+
+		const now = Date.now();
+		// Avoid duplicate broadcasts within 1 second
+		if (now - lastSyncTimeRef.current < 1000) return;
+
+		// If currentTime changed significantly and we have a start time, it might be a seek
+		if (playbackStartTimeRef.current && isPlaying) {
+			const elapsedSeconds =
+				(now - playbackStartTimeRef.current) / 1000;
+			const expectedTime = currentTime;
+			const actualElapsedTime = elapsedSeconds;
+
+			// If difference > 3 seconds, likely a seek event
+			if (Math.abs(actualElapsedTime - expectedTime) > 3) {
+				console.log("🔍 Seek detected, broadcasting new position");
+				socketRef.current?.emit("sync_playback", {
+					room_id: roomId,
+					is_playing: isPlaying,
+					current_time: currentTime,
+					user_name: user?.name,
+				});
+				lastSyncTimeRef.current = now;
+				playbackStartTimeRef.current = now; // Reset the start time
+			}
+		}
+	}, [currentTime, isPlaying, roomId, user]);
 
 	const startCall = async () => {
 		try {
@@ -809,6 +960,15 @@ const WatchPartyPage = () => {
 	const togglePlayback = () => {
 		const newState = !isPlaying;
 		setIsPlaying(newState);
+
+		// Reset or set playback start time
+		if (newState) {
+			playbackStartTimeRef.current = Date.now();
+		} else {
+			playbackStartTimeRef.current = null;
+		}
+
+		lastSyncTimeRef.current = Date.now();
 		socketRef.current?.emit("sync_playback", {
 			room_id: roomId,
 			is_playing: newState,

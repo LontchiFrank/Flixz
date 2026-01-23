@@ -655,13 +655,24 @@ async def disconnect(sid):
 async def join_room(sid, data):
     room_id = data.get('room_id')
     user_name = data.get('user_name', 'Anonymous')
-    
+
     await sio.enter_room(sid, room_id)
-    
+
     if room_id not in room_connections:
         room_connections[room_id] = {}
     room_connections[room_id][sid] = user_name
-    
+
+    # Get current party state from database
+    party = await db.watch_parties.find_one({"room_id": room_id})
+
+    # Send current playback state to the joining user
+    if party:
+        await sio.emit('initial_sync', {
+            'is_playing': party.get('is_playing', False),
+            'current_time': party.get('current_time', 0.0),
+            'source': party.get('current_source')
+        }, to=sid)
+
     await sio.emit('user_joined', {'user_name': user_name}, room=room_id)
     logger.info(f"{user_name} joined room {room_id}")
 
@@ -703,6 +714,27 @@ async def sync_playback(sid, data):
         broadcast_data['source'] = source
 
     await sio.emit('playback_sync', broadcast_data, room=room_id, skip_sid=sid)
+
+@sio.event
+async def position_update(sid, data):
+    """Handle continuous position updates from host"""
+    room_id = data.get('room_id')
+    current_time = data.get('current_time')
+    is_playing = data.get('is_playing')
+    user_name = data.get('user_name')
+
+    # Update database with latest position (lightweight update)
+    await db.watch_parties.update_one(
+        {"room_id": room_id},
+        {"$set": {"current_time": current_time, "is_playing": is_playing}}
+    )
+
+    # Broadcast position to all participants except sender
+    await sio.emit('position_update', {
+        'current_time': current_time,
+        'is_playing': is_playing,
+        'user_name': user_name
+    }, room=room_id, skip_sid=sid)
 
 @sio.event
 async def chat_message(sid, data):
