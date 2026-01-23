@@ -505,27 +505,32 @@ const WatchPartyPage = () => {
 			// Set syncing flag to prevent sync loops
 			isSyncingRef.current = true;
 
-			// Calculate drift if we're playing
-			if (isPlaying && data.is_playing) {
-				const drift = Math.abs(currentTime - data.current_time);
-				if (drift > 3) {
-					console.log(`⏰ Drift detected: ${drift.toFixed(1)}s - correcting`);
-					toast.info(
-						`Syncing playback (${drift.toFixed(1)}s difference)`,
-						{ duration: 2000 }
-					);
+			// Calculate drift using state updater to avoid stale closure
+			setCurrentTime((prevTime) => {
+				setIsPlaying((prevPlaying) => {
+					// Calculate drift if we're playing
+					if (prevPlaying && data.is_playing) {
+						const drift = Math.abs(prevTime - data.current_time);
+						if (drift > 3) {
+							console.log(`⏰ Drift detected: ${drift.toFixed(1)}s - correcting`);
+							toast.info(
+								`Syncing playback (${drift.toFixed(1)}s difference)`,
+								{ duration: 2000 }
+							);
+						}
+					}
+					return data.is_playing;
+				});
+
+				// Reset playback start time when receiving sync
+				if (data.is_playing) {
+					playbackStartTimeRef.current = Date.now();
+				} else {
+					playbackStartTimeRef.current = null;
 				}
-			}
 
-			setIsPlaying(data.is_playing);
-			setCurrentTime(data.current_time);
-
-			// Reset playback start time when receiving sync
-			if (data.is_playing) {
-				playbackStartTimeRef.current = Date.now();
-			} else {
-				playbackStartTimeRef.current = null;
-			}
+				return data.current_time;
+			});
 
 			// Sync source if provided
 			if (data.source) {
@@ -561,25 +566,25 @@ const WatchPartyPage = () => {
 
 		// Position update event - continuous sync from host
 		socketRef.current.on("position_update", (data) => {
-			// Only non-hosts should sync to position updates
-			const isHost =
-				currentParty?.host_id === user?.user_id ||
-				currentParty?.host_name === user?.name;
+			// Store data for drift correction check in a state updater
+			setCurrentTime((prevTime) => {
+				// Only sync if we're playing and drift is significant
+				if (data.is_playing && !isSyncingRef.current) {
+					const drift = Math.abs(prevTime - data.current_time);
 
-			if (!isHost && data.is_playing && isPlaying) {
-				const drift = Math.abs(currentTime - data.current_time);
-
-				// Only correct if drift is significant (>2 seconds)
-				if (drift > 2) {
-					console.log(`🔄 Auto-correcting drift: ${drift.toFixed(1)}s`);
-					isSyncingRef.current = true;
-					setCurrentTime(data.current_time);
-					playbackStartTimeRef.current = Date.now();
-					setTimeout(() => {
-						isSyncingRef.current = false;
-					}, 500);
+					// Only correct if drift is significant (>2 seconds)
+					if (drift > 2) {
+						console.log(`🔄 Auto-correcting drift: ${drift.toFixed(1)}s`);
+						isSyncingRef.current = true;
+						playbackStartTimeRef.current = Date.now();
+						setTimeout(() => {
+							isSyncingRef.current = false;
+						}, 500);
+						return data.current_time;
+					}
 				}
-			}
+				return prevTime;
+			});
 		});
 
 		socketRef.current.on("new_message", (data) => {
