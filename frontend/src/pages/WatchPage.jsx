@@ -60,7 +60,9 @@ const WatchPage = () => {
   const [episode, setEpisode] = useState(1);
   const [sourceError, setSourceError] = useState(false);
   const [currentSourceIndex, setCurrentSourceIndex] = useState(0);
-  
+  const [showEpisodePicker, setShowEpisodePicker] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
   const videoRef = useRef(null);
   const controlsTimeout = useRef(null);
   const iframeRef = useRef(null);
@@ -145,6 +147,23 @@ const WatchPage = () => {
 
     return () => clearInterval(interval);
   }, [user, currentTime, duration, saveProgress]);
+
+  // Listen for fullscreen changes
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+      // Hide episode and source pickers when entering fullscreen
+      if (document.fullscreenElement) {
+        setShowEpisodePicker(false);
+        setShowSourcePicker(false);
+      }
+    };
+
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+    };
+  }, []);
 
   const getStreamingUrl = () => {
     if (isCustomContent && customVideoUrl) {
@@ -370,32 +389,45 @@ const WatchPage = () => {
                     {type === "tv" && ` • S${season} E${episode}`}
                   </p>
                 </div>
+                {/* Episode Picker Toggle for TV Shows */}
+                {type === "tv" && details?.seasons && !isFullscreen && (
+                  <button
+                    onClick={() => setShowEpisodePicker(!showEpisodePicker)}
+                    data-testid="toggle-episodes-btn"
+                    className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/10 backdrop-blur-md hover:bg-white/20 transition-all"
+                  >
+                    <Tv className="w-4 h-4" />
+                    <span className="text-sm">Episodes</span>
+                  </button>
+                )}
               </div>
 
               {/* Source Selector */}
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={tryNextSource}
-                  data-testid="try-next-source-btn"
-                  className="flex items-center gap-2 px-4 py-2 rounded-full bg-[#7C3AED]/20 text-[#7C3AED] hover:bg-[#7C3AED]/30 transition-all"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                  <span className="text-sm">Try Next</span>
-                </button>
-                <button
-                  onClick={() => setShowSourcePicker(!showSourcePicker)}
-                  data-testid="source-picker-btn"
-                  className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/10 backdrop-blur-md hover:bg-white/20 transition-all"
-                >
-                  <Server className="w-4 h-4" />
-                  <span className="text-sm">{selectedSource.name}</span>
-                </button>
-              </div>
+              {!isFullscreen && (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={tryNextSource}
+                    data-testid="try-next-source-btn"
+                    className="flex items-center gap-2 px-4 py-2 rounded-full bg-[#7C3AED]/20 text-[#7C3AED] hover:bg-[#7C3AED]/30 transition-all"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    <span className="text-sm">Try Next</span>
+                  </button>
+                  <button
+                    onClick={() => setShowSourcePicker(!showSourcePicker)}
+                    data-testid="source-picker-btn"
+                    className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/10 backdrop-blur-md hover:bg-white/20 transition-all"
+                  >
+                    <Server className="w-4 h-4" />
+                    <span className="text-sm">{selectedSource.name}</span>
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
           {/* Source Picker Dropdown */}
-          {showSourcePicker && (
+          {showSourcePicker && !isFullscreen && (
             <div className="absolute top-20 right-6 bg-[#0A0A0A] border border-white/10 rounded-xl p-2 z-50 pointer-events-auto min-w-[200px]">
               <p className="text-xs text-[#A1A1AA] px-3 py-2">Select Streaming Source</p>
               <p className="text-xs text-[#52525B] px-3 pb-2">If one doesn't work, try another</p>
@@ -427,9 +459,18 @@ const WatchPage = () => {
           )}
 
           {/* TV Show Episode Selector */}
-          {type === "tv" && details?.seasons && showControls && (
+          {type === "tv" && details?.seasons && showEpisodePicker && !isFullscreen && (
             <div className="absolute top-20 left-6 bg-[#0A0A0A]/90 backdrop-blur-md border border-white/10 rounded-xl p-4 z-40 pointer-events-auto max-h-[300px] overflow-y-auto">
-              <p className="text-sm font-semibold mb-3">Episodes</p>
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-sm font-semibold">Episodes</p>
+                <button
+                  onClick={() => setShowEpisodePicker(false)}
+                  className="text-[#A1A1AA] hover:text-white transition-colors"
+                  aria-label="Close episode picker"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+              </div>
               <div className="flex gap-2 mb-3">
                 <select
                   value={season}
@@ -449,7 +490,11 @@ const WatchPage = () => {
                 {[...Array(20)].map((_, i) => (
                   <button
                     key={i + 1}
-                    onClick={() => setEpisode(i + 1)}
+                    onClick={() => {
+                      setEpisode(i + 1);
+                      // Close the picker after selecting an episode
+                      setTimeout(() => setShowEpisodePicker(false), 300);
+                    }}
                     className={`w-10 h-10 rounded-lg text-sm font-medium transition-all ${
                       episode === i + 1
                         ? "bg-[#7C3AED] text-white"

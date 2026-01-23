@@ -1668,10 +1668,10 @@ const WatchPartyPage = () => {
 						)}
 					</button>
 
-					{/* Current source indicator */}
+					{/* Current source indicator - positioned to avoid blocking video controls */}
 					<div
-						className="absolute bottom-3 left-3 md:bottom-4 md:left-4 px-2 py-1 md:px-3 md:py-1.5 rounded-full bg-black/70 backdrop-blur-sm text-xs md:text-sm flex items-center gap-1 md:gap-2"
-						style={{ zIndex: 2147483646 }}>
+						className="absolute top-3 left-3 md:top-4 md:left-4 px-2 py-1 md:px-3 md:py-1.5 rounded-full bg-black/70 backdrop-blur-sm text-xs md:text-sm flex items-center gap-1 md:gap-2"
+						style={{ zIndex: 10 }}>
 						<Server className="w-3 h-3 md:w-4 md:h-4 text-[#7C3AED]" />
 						<span className="hidden sm:inline">{selectedSource.name}</span>
 					</div>
