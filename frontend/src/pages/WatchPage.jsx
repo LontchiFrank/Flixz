@@ -19,6 +19,11 @@ import {
   RefreshCw,
   AlertCircle,
   Download,
+  X,
+  Shield,
+  Globe,
+  Chrome,
+  Info,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { API } from "../App";
@@ -408,7 +413,9 @@ const WatchPage = () => {
                   <p className="text-[#A1A1AA] mb-6">
                     {selectedSource.name} is not working. This might be due to geo-restrictions, ad blockers, or browser settings.
                   </p>
-                  <div className="flex flex-col gap-3">
+
+                  {/* Primary Actions */}
+                  <div className="flex flex-col gap-3 mb-4">
                     <button
                       onClick={tryNextSource}
                       className="btn-primary flex items-center justify-center gap-2"
@@ -422,6 +429,229 @@ const WatchPage = () => {
                     >
                       Troubleshooting Guide
                     </button>
+                  </div>
+
+                  {/* Alternative Viewing Options */}
+                  <div className="pt-4 border-t border-white/10">
+                    <p className="text-xs text-[#A1A1AA] mb-3">Alternative Options:</p>
+                    <div className="flex flex-col gap-2">
+                      {/* Watch Trailer */}
+                      {trailerKey && (
+                        <button
+                          onClick={() => {
+                            changeSource(STREAMING_SOURCES.find(s => s.id === 'trailer'));
+                            setIframeError(false);
+                          }}
+                          className="text-sm px-4 py-2 rounded-lg bg-white/5 hover:bg-white/10 transition-all flex items-center justify-center gap-2"
+                        >
+                          <Film className="w-4 h-4" />
+                          Watch Trailer Instead
+                        </button>
+                      )}
+
+                      {/* View on TMDB */}
+                      <a
+                        href={`https://www.themoviedb.org/${type}/${id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm px-4 py-2 rounded-lg bg-white/5 hover:bg-white/10 transition-all flex items-center justify-center gap-2"
+                      >
+                        <Info className="w-4 h-4" />
+                        View on TMDB
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Troubleshooting Modal */}
+            {showTroubleshooting && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/95 z-20 p-4 overflow-y-auto">
+                <div className="max-w-3xl w-full bg-[#0A0A0A] border border-white/10 rounded-xl p-6 my-8">
+                  {/* Header */}
+                  <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-[#7C3AED]/20 flex items-center justify-center">
+                        <Info className="w-5 h-5 text-[#7C3AED]" />
+                      </div>
+                      <h2 className="text-2xl font-bold">Troubleshooting Guide</h2>
+                    </div>
+                    <button
+                      onClick={() => setShowTroubleshooting(false)}
+                      className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-all"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Diagnostic Info */}
+                  <div className="mb-6 p-4 bg-white/5 rounded-lg border border-white/10">
+                    <h3 className="text-sm font-semibold mb-2 flex items-center gap-2">
+                      <Chrome className="w-4 h-4" />
+                      Current Status
+                    </h3>
+                    <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <span className="text-[#A1A1AA]">Source:</span>
+                        <span className="ml-2 font-medium">{selectedSource.name}</span>
+                      </div>
+                      <div>
+                        <span className="text-[#A1A1AA]">Browser:</span>
+                        <span className="ml-2 font-medium">{navigator.userAgent.includes('Chrome') ? 'Chrome' : navigator.userAgent.includes('Firefox') ? 'Firefox' : navigator.userAgent.includes('Safari') ? 'Safari' : 'Unknown'}</span>
+                      </div>
+                      <div>
+                        <span className="text-[#A1A1AA]">Content:</span>
+                        <span className="ml-2 font-medium">{type === 'tv' ? `TV Show (S${season}E${episode})` : 'Movie'}</span>
+                      </div>
+                      <div>
+                        <span className="text-[#A1A1AA]">Status:</span>
+                        <span className="ml-2 font-medium text-red-400">Failed to Load</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Common Issues */}
+                  <div className="space-y-4">
+                    <h3 className="text-lg font-semibold mb-4">Common Issues & Solutions</h3>
+
+                    {/* Issue 1: Geo-blocking */}
+                    <div className="p-4 bg-white/5 rounded-lg border border-white/10">
+                      <div className="flex items-start gap-3">
+                        <div className="w-8 h-8 rounded-full bg-red-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+                          <Globe className="w-4 h-4 text-red-400" />
+                        </div>
+                        <div className="flex-1">
+                          <h4 className="font-semibold mb-2">Geographic Restrictions</h4>
+                          <p className="text-sm text-[#A1A1AA] mb-3">
+                            Many streaming sources block access from certain countries (especially the US due to copyright laws).
+                          </p>
+                          <div className="space-y-2 text-sm">
+                            <p className="font-medium text-[#7C3AED]">Solutions:</p>
+                            <ul className="list-disc list-inside space-y-1 text-[#A1A1AA] ml-4">
+                              <li>Try all available sources - some work in different regions</li>
+                              <li>Use a VPN to connect from a different country (Europe or Asia often works better)</li>
+                              <li>Try using your mobile data instead of WiFi (different IP)</li>
+                            </ul>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Issue 2: Ad Blockers */}
+                    <div className="p-4 bg-white/5 rounded-lg border border-white/10">
+                      <div className="flex items-start gap-3">
+                        <div className="w-8 h-8 rounded-full bg-yellow-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+                          <Shield className="w-4 h-4 text-yellow-400" />
+                        </div>
+                        <div className="flex-1">
+                          <h4 className="font-semibold mb-2">Ad Blockers & Browser Extensions</h4>
+                          <p className="text-sm text-[#A1A1AA] mb-3">
+                            Ad blockers and privacy extensions can prevent streaming sources from loading.
+                          </p>
+                          <div className="space-y-2 text-sm">
+                            <p className="font-medium text-[#7C3AED]">Solutions:</p>
+                            <ul className="list-disc list-inside space-y-1 text-[#A1A1AA] ml-4">
+                              <li>Temporarily disable uBlock Origin, AdBlock Plus, or similar extensions</li>
+                              <li>Whitelist this site in your ad blocker settings</li>
+                              <li>Try in an Incognito/Private browsing window (extensions are usually disabled)</li>
+                              <li>Disable "Enhanced Tracking Prevention" in Firefox or "Shields" in Brave</li>
+                            </ul>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Issue 3: Browser Settings */}
+                    <div className="p-4 bg-white/5 rounded-lg border border-white/10">
+                      <div className="flex items-start gap-3">
+                        <div className="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+                          <Chrome className="w-4 h-4 text-blue-400" />
+                        </div>
+                        <div className="flex-1">
+                          <h4 className="font-semibold mb-2">Browser Compatibility</h4>
+                          <p className="text-sm text-[#A1A1AA] mb-3">
+                            Some browsers have stricter security settings that block embedded content.
+                          </p>
+                          <div className="space-y-2 text-sm">
+                            <p className="font-medium text-[#7C3AED]">Solutions:</p>
+                            <ul className="list-disc list-inside space-y-1 text-[#A1A1AA] ml-4">
+                              <li>Try a different browser (Chrome and Firefox usually work best)</li>
+                              <li>Ensure your browser is up to date</li>
+                              <li>Clear your browser cache and cookies</li>
+                              <li>Disable "Block third-party cookies" in browser settings</li>
+                              <li>Check if JavaScript is enabled</li>
+                            </ul>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Issue 4: Network/ISP Blocking */}
+                    <div className="p-4 bg-white/5 rounded-lg border border-white/10">
+                      <div className="flex items-start gap-3">
+                        <div className="w-8 h-8 rounded-full bg-purple-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+                          <Server className="w-4 h-4 text-purple-400" />
+                        </div>
+                        <div className="flex-1">
+                          <h4 className="font-semibold mb-2">Network & ISP Issues</h4>
+                          <p className="text-sm text-[#A1A1AA] mb-3">
+                            Some ISPs or networks (school, work, public WiFi) block streaming sites.
+                          </p>
+                          <div className="space-y-2 text-sm">
+                            <p className="font-medium text-[#7C3AED]">Solutions:</p>
+                            <ul className="list-disc list-inside space-y-1 text-[#A1A1AA] ml-4">
+                              <li>Try switching from WiFi to mobile data (or vice versa)</li>
+                              <li>Use a VPN to bypass network restrictions</li>
+                              <li>Try a different network if possible</li>
+                            </ul>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Quick Actions */}
+                  <div className="mt-6 p-4 bg-[#7C3AED]/10 border border-[#7C3AED]/30 rounded-lg">
+                    <h3 className="text-sm font-semibold mb-3">Quick Actions</h3>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        onClick={() => {
+                          setShowTroubleshooting(false);
+                          tryNextSource();
+                        }}
+                        className="btn-primary text-sm px-4 py-2"
+                      >
+                        <RefreshCw className="w-3 h-3 mr-2" />
+                        Try Next Source
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowSourcePicker(true);
+                          setShowTroubleshooting(false);
+                        }}
+                        className="btn-secondary text-sm px-4 py-2"
+                      >
+                        <Server className="w-3 h-3 mr-2" />
+                        Choose Different Source
+                      </button>
+                      <button
+                        onClick={() => {
+                          window.location.reload();
+                        }}
+                        className="btn-secondary text-sm px-4 py-2"
+                      >
+                        <RefreshCw className="w-3 h-3 mr-2" />
+                        Reload Page
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Recommendation */}
+                  <div className="mt-4 p-3 bg-green-500/10 border border-green-500/30 rounded-lg">
+                    <p className="text-sm text-green-400">
+                      <strong>💡 Recommendation:</strong> If you're in the US and nothing works, try using a VPN connected to a European server (UK, Germany, Netherlands). VidSrc sources typically work well from Europe.
+                    </p>
                   </div>
                 </div>
               </div>
