@@ -1435,6 +1435,12 @@ const WatchPartyPage = () => {
 	const streamingUrl = getStreamingUrl();
 	const title = movieDetails?.title || movieDetails?.name;
 	const remoteStreamEntries = Object.entries(remoteStreams);
+
+	// Filter out the screen sharer from small video panels when viewing their screen
+	const filteredRemoteStreams = activeScreenShare && !isSharingScreen
+		? remoteStreamEntries.filter(([peerId]) => peerId !== activeScreenShare.sid)
+		: remoteStreamEntries;
+
 	const showEmbeddedPlayer = streamingUrl && selectedSource.id !== "trailer";
 	const isCreator =
 		currentParty?.host_id === user?.user_id ||
@@ -1631,11 +1637,14 @@ const WatchPartyPage = () => {
 							<video
 								autoPlay
 								playsInline
+								muted={false}
 								ref={(el) => {
 									if (el && remoteStreams[activeScreenShare.sid]) {
 										const stream = remoteStreams[activeScreenShare.sid];
 										if (el.srcObject !== stream) {
+											console.log("🖥️ Setting screen share stream to main video element");
 											el.srcObject = stream;
+											el.muted = false; // Ensure audio is enabled
 											el.play().catch((err) => {
 												console.log("Screen share video play error:", err.name);
 											});
@@ -1805,16 +1814,18 @@ const WatchPartyPage = () => {
 						</div>
 					)}
 
-					{/* Remote Participant Videos Overlay - Hidden when viewing screen share */}
-					{isInCall && remoteStreamEntries.length > 0 && !(activeScreenShare && !isSharingScreen) && (
+					{/* Remote Participant Videos Overlay - Show small videos when viewing screen share */}
+					{isInCall && filteredRemoteStreams.length > 0 && (
 						<div
 							className={`absolute ${
-								isVideoFullscreen
+								activeScreenShare && !isSharingScreen
+									? "bottom-24 md:bottom-20 left-3 md:left-4" // Move to bottom-left when viewing screen share
+									: isVideoFullscreen
 									? "top-6 right-4"
 									: "top-16 md:top-20 right-3 md:right-4"
-							} space-y-2`}
+							} ${activeScreenShare && !isSharingScreen ? "flex gap-2" : "space-y-2"}`}
 							style={{ zIndex: 2147483647 }}>
-							{remoteStreamEntries.slice(0, 3).map(([peerId, stream]) => (
+							{filteredRemoteStreams.slice(0, 3).map(([peerId, stream]) => (
 								<div
 									key={peerId}
 									className={`${
@@ -1844,14 +1855,14 @@ const WatchPartyPage = () => {
 									</div>
 								</div>
 							))}
-							{remoteStreamEntries.length > 3 && (
+							{filteredRemoteStreams.length > 3 && (
 								<div
 									className={`${
 										isVideoFullscreen
 											? "w-40 h-10 sm:w-48 sm:h-12 md:w-56 md:h-12"
 											: "w-32 h-10 sm:w-40 sm:h-10 md:w-48 md:h-12"
 									} rounded-lg bg-black/80 flex items-center justify-center text-xs sm:text-sm`}>
-									+{remoteStreamEntries.length - 3} more
+									+{filteredRemoteStreams.length - 3} more
 								</div>
 							)}
 						</div>

@@ -487,6 +487,11 @@ const YouTubePage = () => {
 
   const remoteStreamEntries = Object.entries(remoteStreams);
 
+  // Filter out the screen sharer from small video panels when viewing their screen
+  const filteredRemoteStreams = activeScreenShare && !isSharingScreen
+    ? remoteStreamEntries.filter(([peerId]) => peerId !== activeScreenShare.sid)
+    : remoteStreamEntries;
+
   return (
     <div className="min-h-screen bg-[#050505] pb-20 md:pb-8">
       {/* Header */}
@@ -566,11 +571,14 @@ const YouTubePage = () => {
                   <video
                     autoPlay
                     playsInline
+                    muted={false}
                     ref={(el) => {
                       if (el && remoteStreams[activeScreenShare.sid]) {
                         const stream = remoteStreams[activeScreenShare.sid];
                         if (el.srcObject !== stream) {
+                          console.log("🖥️ Setting screen share stream to main video element");
                           el.srcObject = stream;
+                          el.muted = false; // Ensure audio is enabled
                           el.play().catch((err) => {
                             console.log("Screen share video play error:", err.name);
                           });
@@ -635,10 +643,14 @@ const YouTubePage = () => {
                 </div>
               )}
 
-              {/* Remote Videos - Hidden when viewing screen share */}
-              {isInCall && remoteStreamEntries.length > 0 && !(activeScreenShare && !isSharingScreen) && (
-                <div className="absolute top-4 right-4 space-y-2 z-10">
-                  {remoteStreamEntries.slice(0, 3).map(([peerId, stream]) => (
+              {/* Remote Videos - Show as small thumbnails when viewing screen share */}
+              {isInCall && filteredRemoteStreams.length > 0 && (
+                <div className={`absolute ${
+                  activeScreenShare && !isSharingScreen
+                    ? "bottom-4 left-4 flex gap-2" // Bottom-left when viewing screen share
+                    : "top-4 right-4 space-y-2" // Normal position
+                } z-10`}>
+                  {filteredRemoteStreams.slice(0, 3).map(([peerId, stream]) => (
                     <div
                       key={peerId}
                       className="w-48 h-36 rounded-lg overflow-hidden border-2 border-white/20 shadow-2xl bg-[#121212]"
@@ -655,9 +667,9 @@ const YouTubePage = () => {
                       />
                     </div>
                   ))}
-                  {remoteStreamEntries.length > 3 && (
+                  {filteredRemoteStreams.length > 3 && (
                     <div className="w-48 h-12 rounded-lg bg-black/80 flex items-center justify-center text-sm">
-                      +{remoteStreamEntries.length - 3} more
+                      +{filteredRemoteStreams.length - 3} more
                     </div>
                   )}
                 </div>
