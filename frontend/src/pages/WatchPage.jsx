@@ -63,10 +63,14 @@ const WatchPage = () => {
   const [currentSourceIndex, setCurrentSourceIndex] = useState(0);
   const [showEpisodePicker, setShowEpisodePicker] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showTroubleshooting, setShowTroubleshooting] = useState(false);
+  const [iframeLoaded, setIframeLoaded] = useState(false);
+  const [iframeError, setIframeError] = useState(false);
 
   const videoRef = useRef(null);
   const controlsTimeout = useRef(null);
   const iframeRef = useRef(null);
+  const loadTimeoutRef = useRef(null);
 
   const fetchCustomContent = useCallback(async () => {
     try {
@@ -136,7 +140,31 @@ const WatchPage = () => {
   // Reset error state when source changes
   useEffect(() => {
     setSourceError(false);
-  }, [selectedSource]);
+    setIframeLoaded(false);
+    setIframeError(false);
+
+    // Clear any existing timeout
+    if (loadTimeoutRef.current) {
+      clearTimeout(loadTimeoutRef.current);
+    }
+
+    // Set a timeout to detect if iframe doesn't load within 10 seconds
+    loadTimeoutRef.current = setTimeout(() => {
+      if (!iframeLoaded) {
+        console.warn("⚠️ Iframe failed to load within 10 seconds");
+        setIframeError(true);
+        toast.error("This source is taking too long to load. Try another source.", {
+          duration: 5000,
+        });
+      }
+    }, 10000);
+
+    return () => {
+      if (loadTimeoutRef.current) {
+        clearTimeout(loadTimeoutRef.current);
+      }
+    };
+  }, [selectedSource, season, episode]);
 
   useEffect(() => {
     // Save progress periodically
@@ -336,13 +364,69 @@ const WatchPage = () => {
       >
         {/* Embedded Streaming Player */}
         {showEmbeddedPlayer ? (
-          <iframe
-            ref={iframeRef}
-            src={streamingUrl}
-            className="w-full h-full"
-            allowFullScreen
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-          />
+          <>
+            <iframe
+              ref={iframeRef}
+              src={streamingUrl}
+              className="w-full h-full"
+              allowFullScreen
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+              onLoad={() => {
+                console.log("✅ Iframe loaded successfully");
+                setIframeLoaded(true);
+                setIframeError(false);
+                if (loadTimeoutRef.current) {
+                  clearTimeout(loadTimeoutRef.current);
+                }
+              }}
+              onError={() => {
+                console.error("❌ Iframe failed to load");
+                setIframeError(true);
+                setIframeLoaded(false);
+              }}
+            />
+
+            {/* Loading indicator */}
+            {!iframeLoaded && !iframeError && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/80 z-10">
+                <div className="text-center">
+                  <div className="w-12 h-12 border-4 border-[#7C3AED] border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+                  <p className="text-white text-sm">Loading {selectedSource.name}...</p>
+                  <p className="text-white/60 text-xs mt-2">If this takes too long, try another source</p>
+                </div>
+              </div>
+            )}
+
+            {/* Error overlay with troubleshooting button */}
+            {iframeError && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/90 z-10">
+                <div className="text-center px-6 max-w-md">
+                  <div className="w-16 h-16 rounded-full bg-red-500/20 flex items-center justify-center mx-auto mb-4">
+                    <AlertCircle className="w-8 h-8 text-red-500" />
+                  </div>
+                  <h3 className="text-xl font-bold mb-2">Source Failed to Load</h3>
+                  <p className="text-[#A1A1AA] mb-6">
+                    {selectedSource.name} is not working. This might be due to geo-restrictions, ad blockers, or browser settings.
+                  </p>
+                  <div className="flex flex-col gap-3">
+                    <button
+                      onClick={tryNextSource}
+                      className="btn-primary flex items-center justify-center gap-2"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      Try Next Source
+                    </button>
+                    <button
+                      onClick={() => setShowTroubleshooting(true)}
+                      className="btn-secondary"
+                    >
+                      Troubleshooting Guide
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
         ) : isCustomContent && customVideoUrl ? (
           // Custom video player for uploaded content
           <video
