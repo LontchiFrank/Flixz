@@ -155,13 +155,16 @@ const WatchPage = () => {
 
     // Set a timeout to detect if iframe doesn't load within 10 seconds
     loadTimeoutRef.current = setTimeout(() => {
-      if (!iframeLoaded) {
-        console.warn("⚠️ Iframe failed to load within 10 seconds");
-        setIframeError(true);
-        toast.error("This source is taking too long to load. Try another source.", {
-          duration: 5000,
-        });
-      }
+      setIframeLoaded((loaded) => {
+        if (!loaded) {
+          console.warn("⚠️ Iframe failed to load within 10 seconds");
+          setIframeError(true);
+          toast.error("This source is taking too long to load. Try another source.", {
+            duration: 5000,
+          });
+        }
+        return loaded;
+      });
     }, 10000);
 
     return () => {
