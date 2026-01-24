@@ -131,6 +131,10 @@ const WatchPartyPage = () => {
 	const [isSharingScreen, setIsSharingScreen] = useState(false);
 	const [screenStream, setScreenStream] = useState(null);
 
+	// Screen sharing state (for main view)
+	const [activeScreenShare, setActiveScreenShare] = useState(null); // { sid, name, stream }
+	const [screenShareStreams, setScreenShareStreams] = useState({}); // Map of sid -> screen stream
+
 	// Invite state
 	const [inviteEmail, setInviteEmail] = useState("");
 	const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
@@ -687,6 +691,26 @@ const WatchPartyPage = () => {
 			console.log("Media toggle:", data);
 		});
 
+		// Screen sharing events
+		socketRef.current.on("screen_share_started", (data) => {
+			console.log("🖥️ Screen sharing started by:", data.user_name, "sid:", data.sid);
+
+			// Get the screen share stream from remoteStreams
+			setActiveScreenShare({
+				sid: data.sid,
+				name: data.user_name,
+			});
+
+			toast.info(`${data.user_name} is now sharing their screen`, { duration: 3000 });
+		});
+
+		socketRef.current.on("screen_share_stopped", (data) => {
+			console.log("🖥️ Screen sharing stopped by:", data.user_name);
+
+			setActiveScreenShare(null);
+			toast.info(`${data.user_name} stopped sharing their screen`);
+		});
+
 		socketRef.current.on("party_deleted", (data) => {
 			console.log("🗑️ Party deleted by host");
 			toast.error(`Watch party ended by ${data.user_name}`);
@@ -888,13 +912,24 @@ const WatchPartyPage = () => {
 		try {
 			const stream = await navigator.mediaDevices.getDisplayMedia({
 				video: {
-					cursor: "always"
+					cursor: "always",
+					displaySurface: "monitor"
 				},
-				audio: true
+				audio: {
+					echoCancellation: true,
+					noiseSuppression: true,
+					sampleRate: 44100
+				}
 			});
 
 			setScreenStream(stream);
 			setIsSharingScreen(true);
+
+			// Notify all participants that I'm sharing screen
+			socketRef.current?.emit("screen_share_started", {
+				room_id: roomId,
+				user_name: user?.name,
+			});
 
 			// Replace video track in all peer connections
 			const videoTrack = stream.getVideoTracks()[0];
@@ -910,7 +945,7 @@ const WatchPartyPage = () => {
 				stopScreenShare();
 			};
 
-			toast.success("Screen sharing started");
+			toast.success("You are now sharing your screen. Others see your screen in full view.");
 		} catch (error) {
 			console.error("Failed to start screen share:", error);
 			if (error.name === "NotAllowedError") {
@@ -927,6 +962,12 @@ const WatchPartyPage = () => {
 			setScreenStream(null);
 		}
 		setIsSharingScreen(false);
+
+		// Notify all participants that screen sharing stopped
+		socketRef.current?.emit("screen_share_stopped", {
+			room_id: roomId,
+			user_name: user?.name,
+		});
 
 		// Restore camera video track in all peer connections
 		if (localStream) {
@@ -1577,15 +1618,105 @@ const WatchPartyPage = () => {
 
 				{/* Video Player Section */}
 				<div ref={videoPlayerRef} className="flex-1 relative bg-black">
-					{/* Embedded Streaming Player (default) */}
-					{showEmbeddedPlayer ? (
-						<iframe
-							src={streamingUrl}
-							className="w-full h-full min-h-[250px] md:min-h-[400px]"
-							allowFullScreen
-							allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-						/>
-					) : trailerKey && selectedSource.id === "trailer" ? (
+					{/* Active Screen Share View - Takes Priority */}
+					{activeScreenShare && !isSharingScreen && remoteStreams[activeScreenShare.sid] ? (
+						<div className="relative w-full h-full min-h-[250px] md:min-h-[600px] bg-black flex items-center justify-center">
+							{/* Screen Share Banner */}
+							<div className="absolute top-4 left-4 z-20 px-4 py-2 bg-green-500/90 backdrop-blur-sm rounded-full text-white text-sm font-medium flex items-center gap-2">
+								<div className="w-2 h-2 bg-white rounded-full animate-pulse" />
+								{activeScreenShare.name} is sharing their screen
+							</div>
+
+							{/* Main Screen Share Video */}
+							<video
+								autoPlay
+								playsInline
+								ref={(el) => {
+									if (el && remoteStreams[activeScreenShare.sid]) {
+										const stream = remoteStreams[activeScreenShare.sid];
+										if (el.srcObject !== stream) {
+											el.srcObject = stream;
+											el.play().catch((err) => {
+												console.log("Screen share video play error:", err.name);
+											});
+										}
+									}
+								}}
+								className="w-full h-full object-contain"
+								style={{ maxHeight: "100vh" }}
+							/>
+
+							{/* Info overlay */}
+							<div className="absolute bottom-4 left-4 right-4 text-center text-white/80 text-sm">
+								You are viewing {activeScreenShare.name}'s screen • Video and audio are synced in real-time
+							</div>
+						</div>
+					) : isSharingScreen ? (
+						/* When I'm sharing, show the regular video player for me */
+						<div className="relative w-full h-full">
+							{/* My Screen Sharing Banner */}
+							<div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-20 px-4 py-2 bg-green-500/90 backdrop-blur-sm rounded-full text-white text-sm font-medium flex items-center gap-2">
+								<div className="w-2 h-2 bg-white rounded-full animate-pulse" />
+								You are sharing your screen
+							</div>
+
+							{/* Regular video player */}
+							{showEmbeddedPlayer ? (
+								<iframe
+									src={streamingUrl}
+									className="w-full h-full min-h-[250px] md:min-h-[400px]"
+									allowFullScreen
+									allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+								/>
+							) : trailerKey && selectedSource.id === "trailer" ? (
+								<iframe
+									src={`https://www.youtube.com/embed/${trailerKey}?autoplay=0&controls=1`}
+									className="w-full h-full min-h-[250px] md:min-h-[800px]"
+									allowFullScreen
+									allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+								/>
+							) : (
+								<div className="w-full h-full min-h-[250px] md:min-h-[400px] flex items-center justify-center">
+									{movieDetails?.backdrop_path && (
+										<img
+											src={`${IMAGE_BASE}original${movieDetails.backdrop_path}`}
+											alt={title}
+											className="absolute inset-0 w-full h-full object-cover opacity-30"
+										/>
+									)}
+									<div className="relative text-center p-4 md:p-6">
+										<div className="w-16 h-16 md:w-20 md:h-20 rounded-full bg-[#7C3AED]/20 flex items-center justify-center mb-3 md:mb-4 mx-auto">
+											<Film className="w-8 h-8 md:w-10 md:h-10 text-[#7C3AED]" />
+										</div>
+										<h3 className="text-lg md:text-xl font-bold mb-2">
+											Select a Streaming Source
+										</h3>
+										<p className="text-sm md:text-base text-[#A1A1AA] mb-4 max-w-md mx-auto px-2">
+											Click the source picker above to choose a streaming source, or
+											click "Try Next" to automatically cycle through sources.
+										</p>
+										<button
+											onClick={tryNextSource}
+											className="btn-primary flex items-center gap-2 mx-auto text-sm md:text-base">
+											<RefreshCw className="w-4 h-4 md:w-5 md:h-5" />
+											Try First Source
+										</button>
+									</div>
+								</div>
+							)}
+						</div>
+					) : (
+						/* Normal view - no screen sharing active */
+						<>
+							{/* Embedded Streaming Player (default) */}
+							{showEmbeddedPlayer ? (
+								<iframe
+									src={streamingUrl}
+									className="w-full h-full min-h-[250px] md:min-h-[400px]"
+									allowFullScreen
+									allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+								/>
+							) : trailerKey && selectedSource.id === "trailer" ? (
 						// YouTube Trailer (fallback)
 						<iframe
 							src={`https://www.youtube.com/embed/${trailerKey}?autoplay=0&controls=1`}
@@ -1594,38 +1725,40 @@ const WatchPartyPage = () => {
 							allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
 						/>
 					) : (
-						// Backdrop with instructions
-						<div className="w-full h-full min-h-[250px] md:min-h-[400px] flex items-center justify-center">
-							{movieDetails?.backdrop_path && (
-								<img
-									src={`${IMAGE_BASE}original${movieDetails.backdrop_path}`}
-									alt={title}
-									className="absolute inset-0 w-full h-full object-cover opacity-30"
-								/>
-							)}
-							<div className="relative text-center p-4 md:p-6">
-								<div className="w-16 h-16 md:w-20 md:h-20 rounded-full bg-[#7C3AED]/20 flex items-center justify-center mb-3 md:mb-4 mx-auto">
-									<Film className="w-8 h-8 md:w-10 md:h-10 text-[#7C3AED]" />
+								// Backdrop with instructions
+								<div className="w-full h-full min-h-[250px] md:min-h-[400px] flex items-center justify-center">
+									{movieDetails?.backdrop_path && (
+										<img
+											src={`${IMAGE_BASE}original${movieDetails.backdrop_path}`}
+											alt={title}
+											className="absolute inset-0 w-full h-full object-cover opacity-30"
+										/>
+									)}
+									<div className="relative text-center p-4 md:p-6">
+										<div className="w-16 h-16 md:w-20 md:h-20 rounded-full bg-[#7C3AED]/20 flex items-center justify-center mb-3 md:mb-4 mx-auto">
+											<Film className="w-8 h-8 md:w-10 md:h-10 text-[#7C3AED]" />
+										</div>
+										<h3 className="text-lg md:text-xl font-bold mb-2">
+											Select a Streaming Source
+										</h3>
+										<p className="text-sm md:text-base text-[#A1A1AA] mb-4 max-w-md mx-auto px-2">
+											Click the source picker above to choose a streaming source, or
+											click "Try Next" to automatically cycle through sources.
+										</p>
+										<button
+											onClick={tryNextSource}
+											className="btn-primary flex items-center gap-2 mx-auto text-sm md:text-base">
+											<RefreshCw className="w-4 h-4 md:w-5 md:h-5" />
+											Try First Source
+										</button>
+									</div>
 								</div>
-								<h3 className="text-lg md:text-xl font-bold mb-2">
-									Select a Streaming Source
-								</h3>
-								<p className="text-sm md:text-base text-[#A1A1AA] mb-4 max-w-md mx-auto px-2">
-									Click the source picker above to choose a streaming source, or
-									click "Try Next" to automatically cycle through sources.
-								</p>
-								<button
-									onClick={tryNextSource}
-									className="btn-primary flex items-center gap-2 mx-auto text-sm md:text-base">
-									<RefreshCw className="w-4 h-4 md:w-5 md:h-5" />
-									Try First Source
-								</button>
-							</div>
-						</div>
+							)}
+						</>
 					)}
 
-					{/* Picture-in-Picture Video Overlay (Your Video) */}
-					{isInCall && (
+					{/* Picture-in-Picture Video Overlay (Your Video) - Hidden during screen share viewing */}
+					{isInCall && !(activeScreenShare && !isSharingScreen) && (
 						<div
 							className={`absolute ${
 								isVideoFullscreen
@@ -1672,8 +1805,8 @@ const WatchPartyPage = () => {
 						</div>
 					)}
 
-					{/* Remote Participant Videos Overlay */}
-					{isInCall && remoteStreamEntries.length > 0 && (
+					{/* Remote Participant Videos Overlay - Hidden when viewing screen share */}
+					{isInCall && remoteStreamEntries.length > 0 && !(activeScreenShare && !isSharingScreen) && (
 						<div
 							className={`absolute ${
 								isVideoFullscreen

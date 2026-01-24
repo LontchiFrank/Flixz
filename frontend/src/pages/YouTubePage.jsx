@@ -59,6 +59,9 @@ const YouTubePage = () => {
   const [screenStream, setScreenStream] = useState(null);
   const [participants, setParticipants] = useState([]);
 
+  // Screen sharing state (for main view)
+  const [activeScreenShare, setActiveScreenShare] = useState(null); // { sid, name }
+
   // Refs
   const socketRef = useRef(null);
   const localVideoRef = useRef(null);
@@ -293,6 +296,25 @@ const YouTubePage = () => {
         pendingCandidatesRef.current[data.from].push(data.candidate);
       }
     });
+
+    // Screen sharing events
+    socketRef.current.on("screen_share_started", (data) => {
+      console.log("🖥️ Screen sharing started by:", data.user_name, "sid:", data.sid);
+
+      setActiveScreenShare({
+        sid: data.sid,
+        name: data.user_name,
+      });
+
+      toast.info(`${data.user_name} is now sharing their screen`, { duration: 3000 });
+    });
+
+    socketRef.current.on("screen_share_stopped", (data) => {
+      console.log("🖥️ Screen sharing stopped by:", data.user_name);
+
+      setActiveScreenShare(null);
+      toast.info(`${data.user_name} stopped sharing their screen`);
+    });
   }, [user, createPeerConnection, handleOffer]);
 
   // Video call controls
@@ -366,12 +388,25 @@ const YouTubePage = () => {
   const startScreenShare = async () => {
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { cursor: "always" },
-        audio: true,
+        video: {
+          cursor: "always",
+          displaySurface: "monitor"
+        },
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          sampleRate: 44100
+        }
       });
 
       setScreenStream(stream);
       setIsSharingScreen(true);
+
+      // Notify all participants
+      socketRef.current?.emit("screen_share_started", {
+        room_id: roomId,
+        user_name: user?.name,
+      });
 
       const videoTrack = stream.getVideoTracks()[0];
       Object.values(peerConnectionsRef.current).forEach((pc) => {
@@ -385,7 +420,7 @@ const YouTubePage = () => {
         stopScreenShare();
       };
 
-      toast.success("Screen sharing started!");
+      toast.success("You are now sharing your screen. Others see your screen in full view.");
     } catch (error) {
       console.error("Failed to start screen share:", error);
       toast.error("Failed to start screen sharing");
@@ -398,6 +433,12 @@ const YouTubePage = () => {
       setScreenStream(null);
     }
     setIsSharingScreen(false);
+
+    // Notify all participants
+    socketRef.current?.emit("screen_share_stopped", {
+      room_id: roomId,
+      user_name: user?.name,
+    });
 
     if (localStream) {
       const videoTrack = localStream.getVideoTracks()[0];
@@ -511,17 +552,67 @@ const YouTubePage = () => {
         {/* Video Player */}
         {currentVideo ? (
           <div className="space-y-4">
-            <div className="relative w-full rounded-xl overflow-hidden bg-black aspect-video">
-              <iframe
-                src={`https://www.youtube.com/embed/${currentVideo}?autoplay=1&rel=0`}
-                className="w-full h-full"
-                allowFullScreen
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                title="YouTube video player"
-              />
+            <div className="relative w-full rounded-xl overflow-hidden bg-black aspect-video min-h-[400px] md:min-h-[600px]">
+              {/* Active Screen Share View - Takes Priority */}
+              {activeScreenShare && !isSharingScreen && remoteStreams[activeScreenShare.sid] ? (
+                <>
+                  {/* Screen Share Banner */}
+                  <div className="absolute top-4 left-4 z-20 px-4 py-2 bg-green-500/90 backdrop-blur-sm rounded-full text-white text-sm font-medium flex items-center gap-2">
+                    <div className="w-2 h-2 bg-white rounded-full animate-pulse" />
+                    {activeScreenShare.name} is sharing their screen
+                  </div>
 
-              {/* Local Video (PiP) */}
-              {isInCall && localStream && (
+                  {/* Main Screen Share Video */}
+                  <video
+                    autoPlay
+                    playsInline
+                    ref={(el) => {
+                      if (el && remoteStreams[activeScreenShare.sid]) {
+                        const stream = remoteStreams[activeScreenShare.sid];
+                        if (el.srcObject !== stream) {
+                          el.srcObject = stream;
+                          el.play().catch((err) => {
+                            console.log("Screen share video play error:", err.name);
+                          });
+                        }
+                      }
+                    }}
+                    className="w-full h-full object-contain bg-black"
+                  />
+
+                  {/* Info overlay */}
+                  <div className="absolute bottom-4 left-4 right-4 text-center text-white/80 text-sm">
+                    You are viewing {activeScreenShare.name}'s screen • Video and audio are synced in real-time
+                  </div>
+                </>
+              ) : isSharingScreen ? (
+                /* When I'm sharing, show banner and regular YouTube video */
+                <>
+                  <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-20 px-4 py-2 bg-green-500/90 backdrop-blur-sm rounded-full text-white text-sm font-medium flex items-center gap-2">
+                    <div className="w-2 h-2 bg-white rounded-full animate-pulse" />
+                    You are sharing your screen
+                  </div>
+                  <iframe
+                    src={`https://www.youtube.com/embed/${currentVideo}?autoplay=1&rel=0`}
+                    className="w-full h-full"
+                    allowFullScreen
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    title="YouTube video player"
+                  />
+                </>
+              ) : (
+                /* Normal view */
+                <iframe
+                  src={`https://www.youtube.com/embed/${currentVideo}?autoplay=1&rel=0`}
+                  className="w-full h-full"
+                  allowFullScreen
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  title="YouTube video player"
+                />
+              )}
+
+              {/* Local Video (PiP) - Hidden when viewing screen share */}
+              {isInCall && localStream && !(activeScreenShare && !isSharingScreen) && (
                 <div className="absolute bottom-4 right-4 w-48 h-36 rounded-lg overflow-hidden border-2 border-[#7C3AED] shadow-2xl bg-[#121212] z-10">
                   <video
                     ref={localVideoRef}
@@ -544,8 +635,8 @@ const YouTubePage = () => {
                 </div>
               )}
 
-              {/* Remote Videos */}
-              {isInCall && remoteStreamEntries.length > 0 && (
+              {/* Remote Videos - Hidden when viewing screen share */}
+              {isInCall && remoteStreamEntries.length > 0 && !(activeScreenShare && !isSharingScreen) && (
                 <div className="absolute top-4 right-4 space-y-2 z-10">
                   {remoteStreamEntries.slice(0, 3).map(([peerId, stream]) => (
                     <div

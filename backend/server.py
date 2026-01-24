@@ -866,12 +866,38 @@ async def webrtc_toggle_media(sid, data):
     room_id = data.get('room_id')
     media_type = data.get('type')  # 'audio' or 'video'
     enabled = data.get('enabled')
-    
+
     await sio.emit('webrtc_media_toggle', {
         'sid': sid,
         'type': media_type,
         'enabled': enabled
     }, room=room_id, skip_sid=sid)
+
+@sio.event
+async def screen_share_started(sid, data):
+    """Notify all participants that someone started screen sharing"""
+    room_id = data.get('room_id')
+    user_name = data.get('user_name', 'Anonymous')
+
+    await sio.emit('screen_share_started', {
+        'sid': sid,
+        'user_name': user_name
+    }, room=room_id, skip_sid=sid)
+
+    logger.info(f"Screen share started by {user_name} in room {room_id}")
+
+@sio.event
+async def screen_share_stopped(sid, data):
+    """Notify all participants that screen sharing stopped"""
+    room_id = data.get('room_id')
+    user_name = data.get('user_name', 'Anonymous')
+
+    await sio.emit('screen_share_stopped', {
+        'sid': sid,
+        'user_name': user_name
+    }, room=room_id, skip_sid=sid)
+
+    logger.info(f"Screen share stopped by {user_name} in room {room_id}")
 
 # ==================== USER PROFILE ====================
 
