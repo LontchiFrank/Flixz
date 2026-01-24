@@ -627,7 +627,14 @@ async def delete_watch_party(room_id: str, user: dict = Depends(get_current_user
 
 @api_router.get("/watch-party")
 async def list_watch_parties(user: dict = Depends(get_current_user)):
-    parties = await db.watch_parties.find({}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    # Filter parties where user is either host OR participant
+    query = {
+        "$or": [
+            {"host_id": user["user_id"]},
+            {"participants.user_id": user["user_id"]}
+        ]
+    }
+    parties = await db.watch_parties.find(query, {"_id": 0}).sort("created_at", -1).to_list(50)
     for p in parties:
         if isinstance(p["created_at"], str):
             p["created_at"] = datetime.fromisoformat(p["created_at"])

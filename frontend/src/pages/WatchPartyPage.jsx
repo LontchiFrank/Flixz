@@ -1410,10 +1410,13 @@ const WatchPartyPage = () => {
 						<div className="text-center py-12 md:py-20 px-4">
 							<Users className="w-12 h-12 md:w-16 md:h-16 text-[#52525B] mx-auto mb-4" />
 							<h3 className="text-lg md:text-xl font-semibold mb-2">
-								No active parties
+								No watch parties yet
 							</h3>
-							<p className="text-sm md:text-base text-[#A1A1AA]">
-								Create a watch party to get started
+							<p className="text-sm md:text-base text-[#A1A1AA] mb-4">
+								You haven't created or joined any watch parties yet
+							</p>
+							<p className="text-xs md:text-sm text-[#52525B]">
+								Create a party or ask a friend to send you an invite link
 							</p>
 						</div>
 					)}
