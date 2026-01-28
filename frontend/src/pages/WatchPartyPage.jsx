@@ -227,15 +227,37 @@ const WatchPartyPage = () => {
 				console.log(
 					"📺 Received remote track from:",
 					peerId,
+					"kind:",
+					event.track.kind,
 					"streams:",
 					event.streams.length
 				);
-				if (event.streams && event.streams[0]) {
-					setRemoteStreams((prev) => ({
+
+				// Get or create the remote stream for this peer
+				setRemoteStreams((prev) => {
+					let stream = prev[peerId];
+
+					// If stream exists in event.streams, use it
+					if (event.streams && event.streams[0]) {
+						stream = event.streams[0];
+					}
+					// If no stream exists, create one and add the track
+					else if (!stream) {
+						stream = new MediaStream();
+						stream.addTrack(event.track);
+					}
+					// If stream exists but track is not in it, add it
+					else if (!stream.getTracks().find(t => t.id === event.track.id)) {
+						stream.addTrack(event.track);
+					}
+
+					console.log("📺 Updated stream for", peerId, "- tracks:", stream.getTracks().length);
+
+					return {
 						...prev,
-						[peerId]: event.streams[0],
-					}));
-				}
+						[peerId]: stream,
+					};
+				});
 			};
 
 			// Process any pending ICE candidates
@@ -933,11 +955,26 @@ const WatchPartyPage = () => {
 
 			// Replace video track in all peer connections
 			const videoTrack = stream.getVideoTracks()[0];
+			const audioTracks = stream.getAudioTracks();
+
 			Object.values(peerConnectionsRef.current).forEach((pc) => {
-				const sender = pc.getSenders().find(s => s.track?.kind === 'video');
-				if (sender) {
-					sender.replaceTrack(videoTrack);
+				// Replace video track
+				const videoSender = pc.getSenders().find(s => s.track?.kind === 'video');
+				if (videoSender && videoTrack) {
+					videoSender.replaceTrack(videoTrack);
 				}
+
+				// Add audio tracks from screen share (system audio)
+				// Note: We add rather than replace to allow both mic and system audio
+				audioTracks.forEach((audioTrack) => {
+					// Check if we already have this track to avoid duplicates
+					const existingSender = pc.getSenders().find(
+						s => s.track === audioTrack
+					);
+					if (!existingSender) {
+						pc.addTrack(audioTrack, stream);
+					}
+				});
 			});
 
 			// Handle screen share stop
@@ -969,13 +1006,26 @@ const WatchPartyPage = () => {
 			user_name: user?.name,
 		});
 
-		// Restore camera video track in all peer connections
+		// Restore camera video track and remove screen share audio tracks
 		if (localStream) {
 			const videoTrack = localStream.getVideoTracks()[0];
+
 			Object.values(peerConnectionsRef.current).forEach((pc) => {
-				const sender = pc.getSenders().find(s => s.track?.kind === 'video');
-				if (sender && videoTrack) {
-					sender.replaceTrack(videoTrack);
+				// Restore camera video track
+				const videoSender = pc.getSenders().find(s => s.track?.kind === 'video');
+				if (videoSender && videoTrack) {
+					videoSender.replaceTrack(videoTrack);
+				}
+
+				// Remove screen share audio tracks (keep only mic audio from localStream)
+				if (screenStream) {
+					const screenAudioTracks = screenStream.getAudioTracks();
+					screenAudioTracks.forEach((screenAudioTrack) => {
+						const sender = pc.getSenders().find(s => s.track === screenAudioTrack);
+						if (sender) {
+							pc.removeTrack(sender);
+						}
+					});
 				}
 			});
 		}
@@ -1844,10 +1894,20 @@ const WatchPartyPage = () => {
 											if (el && stream) {
 												// Only set if different to avoid re-renders
 												if (el.srcObject !== stream) {
+													console.log("🎥 Setting remote stream for peer", peerId);
 													el.srcObject = stream;
-													el.play().catch((err) => {
-														console.log("Remote video play error:", err.name);
-													});
+
+													// Force play when metadata is loaded
+													el.onloadedmetadata = () => {
+														el.play().catch((err) => {
+															console.error("Remote video play failed:", err.name, "- trying muted");
+															// Fallback: try muted if unmuted fails
+															el.muted = true;
+															el.play().catch((e) => {
+																console.error("Remote video play failed even muted:", e.name);
+															});
+														});
+													};
 												}
 											}
 										}}
