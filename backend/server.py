@@ -57,7 +57,8 @@ sio = socketio.AsyncServer(
         "http://localhost:3001",
         "https://flixz.onrender.com",
         "https://flixz-iota.vercel.app",
-        "https://flixz.onrender.com/api/movies/trending"
+        "https://flixz.onrender.com/api/movies/trending",
+        "https://flixz.onrender.com/api/movies/popular"
     ]
 )
 socket_app = socketio.ASGIApp(sio, app)
