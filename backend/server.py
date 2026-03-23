@@ -1214,6 +1214,7 @@ app.add_middleware(
         "https://flixz-iota.vercel.app",
         # Add any other frontend URLs here
     ],
+    allow_origin_regex=r"https://.*\.vercel\.app",  # Allow all Vercel preview deployments
     allow_methods=["*"],
     allow_headers=["*"],
 )
