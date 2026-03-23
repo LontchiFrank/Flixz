@@ -1202,9 +1202,7 @@ async def serve_upload(content_id: str, filename: str):
 async def health_check():
     return {"status": "healthy", "service": "Flixz API"}
 
-# Include the router in the main app
-app.include_router(api_router)
-
+# Add CORS middleware BEFORE including router
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
@@ -1219,6 +1217,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include the router in the main app
+app.include_router(api_router)
 
 @app.on_event("shutdown")
 async def shutdown_db_client():

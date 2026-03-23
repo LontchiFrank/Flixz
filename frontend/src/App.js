@@ -35,8 +35,7 @@ import { AuthProvider, useAuth } from "./context/AuthContext";
 
 import "./App.css";
 
-const BACKEND_URL = "https://flixz.onrender.com";
-// process.env.REACT_APP_BACKEND_URL;
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:8000";
 export const API = `${BACKEND_URL}/api`;
 
 // Auth Callback Component
