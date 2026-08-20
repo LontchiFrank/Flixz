@@ -1535,6 +1535,20 @@ const WatchPartyPage = () => {
 							)}
 						</button>
 
+						{/* Play/Pause Sync */}
+						<button
+							onClick={togglePlayback}
+							data-testid="toggle-playback-btn"
+							title={isPlaying ? "Pause for everyone" : "Play for everyone"}
+							className="flex items-center gap-1 md:gap-2 px-2 md:px-3 py-2 rounded-full bg-white/10 hover:bg-white/20 transition-all text-sm">
+							{isPlaying ? (
+								<Pause className="w-4 h-4" />
+							) : (
+								<Play className="w-4 h-4" />
+							)}
+							<span className="hidden md:inline">{isPlaying ? "Pause" : "Play"}</span>
+						</button>
+
 						{/* Source Selector */}
 						<button
 							onClick={tryNextSource}
