@@ -4,11 +4,12 @@ import React, { useState } from "react";
 import { useNavigate, Link, useLocation } from "react-router-dom";
 import axios from "axios";
 import { toast } from "sonner";
-import { Mail, Lock, Sparkles, Eye, EyeOff } from "lucide-react";
+import { Mail, Lock, Sparkles, Eye, EyeOff, Copy } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { API } from "../App";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { isInAppBrowser } from "../lib/inAppBrowser";
 
 const LoginPage = () => {
 	const navigate = useNavigate();
@@ -24,6 +25,12 @@ const LoginPage = () => {
 	const redirectPath = params.get("redirect");
 	const isWatchPartyRedirect =
 		redirectPath && redirectPath.includes("/watch-party/");
+	const inAppBrowser = isInAppBrowser();
+
+	const copyPartyLink = () => {
+		navigator.clipboard.writeText(window.location.href);
+		toast.success("Link copied! Paste it in Safari or Chrome to sign in.");
+	};
 
 	const handleSubmit = async (e) => {
 		e.preventDefault();
@@ -98,6 +105,27 @@ const LoginPage = () => {
 							<br />
 							<span className="text-[#A1A1AA]">Sign in to join the party</span>
 						</p>
+					</div>
+				)}
+
+				{/* In-app browser warning (WhatsApp/Instagram/Messenger etc. don't share your saved login) */}
+				{isWatchPartyRedirect && inAppBrowser && (
+					<div className="mb-4 p-4 rounded-lg bg-amber-500/10 border border-amber-500/30">
+						<p className="text-sm text-center text-amber-200">
+							You're viewing this inside an app's built-in browser, which
+							doesn't remember logins from Safari or Chrome. For a smoother
+							experience, tap the <span className="font-semibold">•••</span>{" "}
+							menu and choose{" "}
+							<span className="font-semibold">"Open in Browser"</span>, or:
+						</p>
+						<button
+							type="button"
+							onClick={copyPartyLink}
+							data-testid="copy-party-link-btn"
+							className="mt-3 w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 text-sm transition-all">
+							<Copy className="w-4 h-4" />
+							Copy link to paste in your browser
+						</button>
 					</div>
 				)}
 
@@ -191,7 +219,7 @@ const LoginPage = () => {
 					<p className="text-center text-sm text-[#A1A1AA] mt-6">
 						Don't have an account?{" "}
 						<Link
-							to="/register"
+							to={`/register${location.search}`}
 							data-testid="register-link"
 							className="text-[#7C3AED] hover:underline">
 							Sign up
