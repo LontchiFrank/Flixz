@@ -364,6 +364,9 @@ const WatchPartyPage = () => {
 
 	const fetchPartyDetails = useCallback(async () => {
 		setLoading(true);
+		// Clear any lingering "authentication failed" toast from a previous
+		// attempt so it can't sit on screen overlapping a fresh success toast.
+		toast.dismiss();
 		try {
 			console.log("=== Starting Watch Party Load ===");
 			console.log("Room ID:", roomId);
@@ -382,8 +385,27 @@ const WatchPartyPage = () => {
 				return;
 			}
 
+			// Join party FIRST. This is the only step that actually requires a
+			// valid (non-stale) token, and the room details fetch below is a
+			// public endpoint that would succeed even with a dead session -
+			// join-first means an invalid session bounces straight to login
+			// instead of rendering the room and then yanking the user back.
+			console.log("Step 1: Joining party...");
+			console.log("Sending auth headers:", getAuthHeaders());
+			console.log("User object:", user);
+
+			const joinRes = await axios.post(
+				`${API}/watch-party/${roomId}/join`,
+				{},
+				{
+					headers: getAuthHeaders(),
+					withCredentials: true,
+				}
+			);
+			console.log("✅ Successfully joined party:", joinRes.data);
+
 			// Get party details
-			console.log("Step 1: Fetching party details...");
+			console.log("Step 2: Fetching party details...");
 			const res = await axios.get(`${API}/watch-party/${roomId}`);
 			console.log("✅ Party details loaded:", res.data);
 
@@ -410,7 +432,7 @@ const WatchPartyPage = () => {
 			// Fetch movie details
 			const endpoint = res.data.media_type === "movie" ? "movies" : "tv";
 			console.log(
-				`Step 2: Fetching ${endpoint} details for ID:`,
+				`Step 3: Fetching ${endpoint} details for ID:`,
 				res.data.movie_id
 			);
 
@@ -423,20 +445,6 @@ const WatchPartyPage = () => {
 			);
 			setMovieDetails(movieRes.data);
 
-			// Join party
-			console.log("Step 3: Joining party...");
-			console.log("Sending auth headers:", getAuthHeaders());
-			console.log("User object:", user);
-
-			const joinRes = await axios.post(
-				`${API}/watch-party/${roomId}/join`,
-				{},
-				{
-					headers: getAuthHeaders(),
-					withCredentials: true,
-				}
-			);
-			console.log("✅ Successfully joined party:", joinRes.data);
 			toast.success("Joined watch party!");
 		} catch (error) {
 			console.error("❌ Failed to load watch party:", error);
