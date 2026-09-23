@@ -239,14 +239,7 @@ const AppRouter = () => {
 							</ProtectedRoute>
 						}
 					/>
-					<Route
-						path="/watch-party/:roomId"
-						element={
-							<ProtectedRoute>
-								<WatchPartyPage />
-							</ProtectedRoute>
-						}
-					/>
+					<Route path="/watch-party/:roomId" element={<WatchPartyPage />} />
 				</Routes>
 			</main>
 			<MobileNav />

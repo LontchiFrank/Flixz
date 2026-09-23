@@ -1,6 +1,6 @@
 /** @format */
 
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import axios from "axios";
 import { io } from "socket.io-client";
@@ -98,10 +98,64 @@ const RTC_CONFIG = {
 	],
 };
 
+const extractYoutubeVideoId = (url) => {
+	const patterns = [
+		/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/,
+		/^([a-zA-Z0-9_-]{11})$/,
+	];
+
+	for (const pattern of patterns) {
+		const match = url.match(pattern);
+		if (match && match[1]) {
+			return match[1];
+		}
+	}
+	return null;
+};
+
+let youtubeApiPromise = null;
+const loadYoutubeIframeApi = () => {
+	if (window.YT && window.YT.Player) return Promise.resolve(window.YT);
+	if (youtubeApiPromise) return youtubeApiPromise;
+
+	youtubeApiPromise = new Promise((resolve) => {
+		const previousCallback = window.onYouTubeIframeAPIReady;
+		window.onYouTubeIframeAPIReady = () => {
+			if (previousCallback) previousCallback();
+			resolve(window.YT);
+		};
+		const script = document.createElement("script");
+		script.src = "https://www.youtube.com/iframe_api";
+		document.head.appendChild(script);
+	});
+	return youtubeApiPromise;
+};
+
 const WatchPartyPage = () => {
 	const { roomId } = useParams();
 	const navigate = useNavigate();
-	const { user, token, getAuthHeaders } = useAuth();
+	const { user, getAuthHeaders } = useAuth();
+
+	// Guest join state (for visitors without a Flixz account)
+	const [guestSession, setGuestSession] = useState(() => {
+		if (!roomId) return null;
+		try {
+			const stored = sessionStorage.getItem(`party_guest_${roomId}`);
+			return stored ? JSON.parse(stored) : null;
+		} catch {
+			return null;
+		}
+	});
+	const [guestNameInput, setGuestNameInput] = useState("");
+	const [joiningAsGuest, setJoiningAsGuest] = useState(false);
+	const [guestPromptParty, setGuestPromptParty] = useState(null);
+
+	const identity = useMemo(() => {
+		if (user) return { id: user.user_id, name: user.name, isGuest: false };
+		if (guestSession)
+			return { id: guestSession.user_id, name: guestSession.name, isGuest: true };
+		return null;
+	}, [user, guestSession]);
 
 	// Party state
 	const [parties, setParties] = useState([]);
@@ -120,6 +174,9 @@ const WatchPartyPage = () => {
 	const [searchResults, setSearchResults] = useState([]);
 	const [selectedMovie, setSelectedMovie] = useState(null);
 	const [partyName, setPartyName] = useState("");
+	const [createContentTab, setCreateContentTab] = useState("browse"); // "browse" | "youtube"
+	const [youtubeUrlInput, setYoutubeUrlInput] = useState("");
+	const [changeContentDialogOpen, setChangeContentDialogOpen] = useState(false);
 
 	// Video call state
 	const [isInCall, setIsInCall] = useState(false);
@@ -158,6 +215,8 @@ const WatchPartyPage = () => {
 	const playbackStartTimeRef = useRef(null); // Track when playback started
 	const lastSyncTimeRef = useRef(0); // Track last manual sync to avoid duplicate broadcasts
 	const isSyncingRef = useRef(false); // Prevent sync loops
+	const youtubePlayerRef = useRef(null); // YT.Player instance for youtube-content parties
+	const youtubeContainerRef = useRef(null);
 
 	// Keep localStreamRef in sync with localStream state
 	useEffect(() => {
@@ -362,6 +421,46 @@ const WatchPartyPage = () => {
 		}
 	}, [getAuthHeaders]);
 
+	// Public, unauthenticated preview so a visitor without an account can see
+	// what party they're being asked to join before typing a name.
+	const fetchPartyPreview = useCallback(async () => {
+		setLoading(true);
+		try {
+			const res = await axios.get(`${API}/watch-party/${roomId}`);
+			setGuestPromptParty(res.data);
+		} catch (error) {
+			console.error("Failed to load party preview:", error);
+			if (error.response?.status === 404) {
+				toast.error("Watch party not found. It may have been deleted.");
+				navigate("/watch-party");
+			}
+		} finally {
+			setLoading(false);
+		}
+	}, [roomId, navigate]);
+
+	const joinAsGuest = async () => {
+		if (!guestNameInput.trim()) {
+			toast.error("Please enter your name");
+			return;
+		}
+		setJoiningAsGuest(true);
+		try {
+			const res = await axios.post(`${API}/watch-party/${roomId}/guest-join`, {
+				name: guestNameInput.trim(),
+			});
+			const session = { user_id: res.data.user_id, name: res.data.name };
+			sessionStorage.setItem(`party_guest_${roomId}`, JSON.stringify(session));
+			setGuestSession(session);
+			setGuestPromptParty(null);
+		} catch (error) {
+			console.error("Guest join failed:", error);
+			toast.error(error.response?.data?.detail || "Failed to join watch party");
+		} finally {
+			setJoiningAsGuest(false);
+		}
+	};
+
 	const fetchPartyDetails = useCallback(async () => {
 		setLoading(true);
 		// Clear any lingering "authentication failed" toast from a previous
@@ -370,39 +469,28 @@ const WatchPartyPage = () => {
 		try {
 			console.log("=== Starting Watch Party Load ===");
 			console.log("Room ID:", roomId);
-			console.log("User:", user);
-			console.log("Token:", token);
-			console.log("Auth Headers:", getAuthHeaders());
-			console.log("Cookies:", document.cookie);
+			console.log("Identity:", identity);
 
-			// Verify user is authenticated
-			if (!user) {
-				console.error("❌ No user found, redirecting to login");
-				toast.error("Please log in to join the watch party");
-				navigate(
-					"/login?redirect=" + encodeURIComponent(`/watch-party/${roomId}`)
+			if (user) {
+				// Join party FIRST. This is the only step that actually requires a
+				// valid (non-stale) token, and the room details fetch below is a
+				// public endpoint that would succeed even with a dead session -
+				// join-first means an invalid session bounces straight to login
+				// instead of rendering the room and then yanking the user back.
+				console.log("Step 1: Joining party...");
+				const joinRes = await axios.post(
+					`${API}/watch-party/${roomId}/join`,
+					{},
+					{
+						headers: getAuthHeaders(),
+						withCredentials: true,
+					}
 				);
-				return;
+				console.log("✅ Successfully joined party:", joinRes.data);
 			}
-
-			// Join party FIRST. This is the only step that actually requires a
-			// valid (non-stale) token, and the room details fetch below is a
-			// public endpoint that would succeed even with a dead session -
-			// join-first means an invalid session bounces straight to login
-			// instead of rendering the room and then yanking the user back.
-			console.log("Step 1: Joining party...");
-			console.log("Sending auth headers:", getAuthHeaders());
-			console.log("User object:", user);
-
-			const joinRes = await axios.post(
-				`${API}/watch-party/${roomId}/join`,
-				{},
-				{
-					headers: getAuthHeaders(),
-					withCredentials: true,
-				}
-			);
-			console.log("✅ Successfully joined party:", joinRes.data);
+			// Guests already joined via the name-prompt form (joinAsGuest), which
+			// calls the unauthenticated /guest-join endpoint before guestSession
+			// is set - nothing more to do here for them.
 
 			// Get party details
 			console.log("Step 2: Fetching party details...");
@@ -429,21 +517,25 @@ const WatchPartyPage = () => {
 				}
 			}
 
-			// Fetch movie details
-			const endpoint = res.data.media_type === "movie" ? "movies" : "tv";
-			console.log(
-				`Step 3: Fetching ${endpoint} details for ID:`,
-				res.data.movie_id
-			);
+			// Fetch movie details (skip for youtube parties - no TMDB record)
+			if (res.data.media_type === "youtube") {
+				setMovieDetails(null);
+			} else {
+				const endpoint = res.data.media_type === "movie" ? "movies" : "tv";
+				console.log(
+					`Step 3: Fetching ${endpoint} details for ID:`,
+					res.data.movie_id
+				);
 
-			const movieRes = await axios.get(
-				`${API}/${endpoint}/${res.data.movie_id}`
-			);
-			console.log(
-				"✅ Movie details loaded:",
-				movieRes.data.title || movieRes.data.name
-			);
-			setMovieDetails(movieRes.data);
+				const movieRes = await axios.get(
+					`${API}/${endpoint}/${res.data.movie_id}`
+				);
+				console.log(
+					"✅ Movie details loaded:",
+					movieRes.data.title || movieRes.data.name
+				);
+				setMovieDetails(movieRes.data);
+			}
 
 			toast.success("Joined watch party!");
 		} catch (error) {
@@ -474,7 +566,7 @@ const WatchPartyPage = () => {
 		} finally {
 			setLoading(false);
 		}
-	}, [roomId, user, token, getAuthHeaders, navigate]);
+	}, [roomId, user, identity, getAuthHeaders, navigate]);
 
 	const connectSocket = useCallback(() => {
 		console.log("🔌 Connecting Socket.IO to:", BACKEND_URL);
@@ -489,7 +581,7 @@ const WatchPartyPage = () => {
 			console.log("✅ Socket connected! ID:", socketRef.current.id);
 			socketRef.current.emit("join_room", {
 				room_id: roomId,
-				user_name: user?.name || "Anonymous",
+				user_name: identity?.name || "Anonymous",
 			});
 		});
 
@@ -506,8 +598,17 @@ const WatchPartyPage = () => {
 		});
 
 		socketRef.current.on("user_joined", (data) => {
+			// Joining a room broadcasts to the whole room including the
+			// joiner's own socket - skip that self-notification, the REST
+			// fetch that ran just before connectSocket already has us listed.
+			if (data.user_name === identity?.name) return;
+
 			toast.success(`${data.user_name} joined the party`);
-			setParticipants((prev) => [...prev, { name: data.user_name }]);
+			setParticipants((prev) =>
+				prev.some((p) => p.name === data.user_name)
+					? prev
+					: [...prev, { name: data.user_name }]
+			);
 		});
 
 		socketRef.current.on("user_left", (data) => {
@@ -596,7 +697,7 @@ const WatchPartyPage = () => {
 			}
 
 			// Show sync notification
-			if (data.user_name && data.user_name !== user?.name) {
+			if (data.user_name && data.user_name !== identity?.name) {
 				const action = data.is_playing
 					? "▶️ resumed playback"
 					: "⏸️ paused playback";
@@ -604,6 +705,46 @@ const WatchPartyPage = () => {
 			}
 
 			// Clear syncing flag after a short delay
+			setTimeout(() => {
+				isSyncingRef.current = false;
+			}, 500);
+		});
+
+		// Host swapped what's playing (movie/TV <-> YouTube) mid-party
+		socketRef.current.on("content_changed", async (data) => {
+			console.log("🔀 Content changed:", data);
+			isSyncingRef.current = true;
+
+			setCurrentParty((prev) =>
+				prev
+					? {
+							...prev,
+							media_type: data.media_type,
+							movie_id: data.movie_id,
+							youtube_video_id: data.youtube_video_id,
+					  }
+					: prev
+			);
+			setIsPlaying(false);
+			setCurrentTime(0);
+			playbackStartTimeRef.current = null;
+
+			if (data.media_type === "youtube") {
+				setMovieDetails(null);
+			} else if (data.movie_id) {
+				try {
+					const endpoint = data.media_type === "movie" ? "movies" : "tv";
+					const res = await axios.get(`${API}/${endpoint}/${data.movie_id}`);
+					setMovieDetails(res.data);
+				} catch (err) {
+					console.error("Failed to load new content details:", err);
+				}
+			}
+
+			if (data.user_name && data.user_name !== identity?.name) {
+				toast.info(`${data.user_name} changed what's playing`);
+			}
+
 			setTimeout(() => {
 				isSyncingRef.current = false;
 			}, 500);
@@ -752,15 +893,23 @@ const WatchPartyPage = () => {
 		socketRef.current.on("disconnect", () => {
 			console.log("Disconnected from socket");
 		});
-	}, [roomId, user, createPeerConnection, handleOffer, navigate]);
+	}, [roomId, identity, createPeerConnection, handleOffer, navigate]);
 
 	useEffect(() => {
-		if (roomId) {
-			fetchPartyDetails();
-			connectSocket();
-		} else {
+		if (!roomId) {
 			fetchParties();
+			return;
 		}
+
+		if (!identity) {
+			// No account and no guest session yet - show a name-entry prompt
+			// instead of joining/connecting.
+			fetchPartyPreview();
+			return;
+		}
+
+		fetchPartyDetails();
+		connectSocket();
 
 		return () => {
 			if (socketRef.current) {
@@ -769,7 +918,7 @@ const WatchPartyPage = () => {
 			endCall();
 		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [roomId]);
+	}, [roomId, identity?.id]);
 
 	useEffect(() => {
 		if (chatRef.current) {
@@ -817,21 +966,23 @@ const WatchPartyPage = () => {
 			// Only broadcast if we're the host (to reduce network traffic)
 			// Other participants will sync to the host's broadcasts
 			const isHost =
-				currentParty?.host_id === user?.user_id ||
-				currentParty?.host_name === user?.name;
+				!!identity &&
+				!identity.isGuest &&
+				(currentParty?.host_id === identity.id ||
+					currentParty?.host_name === identity.name);
 
 			if (isHost && socketRef.current) {
 				socketRef.current.emit("position_update", {
 					room_id: roomId,
 					current_time: estimatedTime,
 					is_playing: true,
-					user_name: user?.name,
+					user_name: identity?.name,
 				});
 			}
 		}, 2000); // Broadcast every 2 seconds
 
 		return () => clearInterval(interval);
-	}, [isPlaying, currentTime, roomId, currentParty, user]);
+	}, [isPlaying, currentTime, roomId, currentParty, identity]);
 
 	// Seek detection - detects when user seeks and broadcasts the new position
 	useEffect(() => {
@@ -856,13 +1007,13 @@ const WatchPartyPage = () => {
 					room_id: roomId,
 					is_playing: isPlaying,
 					current_time: currentTime,
-					user_name: user?.name,
+					user_name: identity?.name,
 				});
 				lastSyncTimeRef.current = now;
 				playbackStartTimeRef.current = now; // Reset the start time
 			}
 		}
-	}, [currentTime, isPlaying, roomId, user]);
+	}, [currentTime, isPlaying, roomId, identity]);
 
 	const startCall = async () => {
 		try {
@@ -885,8 +1036,8 @@ const WatchPartyPage = () => {
 			// Join WebRTC room
 			socketRef.current?.emit("webrtc_join", {
 				room_id: roomId,
-				user_id: user?.user_id,
-				user_name: user?.name,
+				user_id: identity?.id,
+				user_name: identity?.name,
 			});
 
 			toast.success("Joined video call!");
@@ -958,7 +1109,7 @@ const WatchPartyPage = () => {
 			// Notify all participants that I'm sharing screen
 			socketRef.current?.emit("screen_share_started", {
 				room_id: roomId,
-				user_name: user?.name,
+				user_name: identity?.name,
 			});
 
 			// Replace video track in all peer connections
@@ -1011,7 +1162,7 @@ const WatchPartyPage = () => {
 		// Notify all participants that screen sharing stopped
 		socketRef.current?.emit("screen_share_stopped", {
 			room_id: roomId,
-			user_name: user?.name,
+			user_name: identity?.name,
 		});
 
 		// Restore camera video track and remove screen share audio tracks
@@ -1072,6 +1223,111 @@ const WatchPartyPage = () => {
 		};
 	}, []);
 
+	// Set up the YouTube IFrame Player for youtube-content parties. Unlike the
+	// vidsrc-style embeds (opaque third-party iframes with no control API),
+	// YouTube's own player exposes real JS control, so this is the one content
+	// type that gets true enforced sync rather than an advisory toast.
+	useEffect(() => {
+		if (currentParty?.media_type !== "youtube" || !currentParty?.youtube_video_id) {
+			return;
+		}
+
+		let cancelled = false;
+
+		loadYoutubeIframeApi().then((YT) => {
+			if (cancelled || !youtubeContainerRef.current) return;
+
+			// Always (re)create against the current container node - React may
+			// have remounted it (e.g. toggling screen share), which would orphan
+			// any previous YT.Player instance still bound to the old node.
+			if (youtubePlayerRef.current?.destroy) {
+				youtubePlayerRef.current.destroy();
+				youtubePlayerRef.current = null;
+			}
+
+			youtubePlayerRef.current = new YT.Player(youtubeContainerRef.current, {
+				videoId: currentParty.youtube_video_id,
+				playerVars: { autoplay: 0, controls: 1, rel: 0 },
+				events: {
+					onReady: (event) => {
+						if (currentTime) event.target.seekTo(currentTime, true);
+						if (isPlaying) event.target.playVideo();
+					},
+					onStateChange: (event) => {
+						// Ignore state changes we caused ourselves via a remote sync
+						if (isSyncingRef.current) return;
+
+						if (event.data === window.YT.PlayerState.PLAYING) {
+							const time = event.target.getCurrentTime();
+							lastSyncTimeRef.current = Date.now();
+							playbackStartTimeRef.current = Date.now();
+							setIsPlaying(true);
+							setCurrentTime(time);
+							socketRef.current?.emit("sync_playback", {
+								room_id: roomId,
+								is_playing: true,
+								current_time: time,
+								user_name: identity?.name,
+							});
+						} else if (event.data === window.YT.PlayerState.PAUSED) {
+							const time = event.target.getCurrentTime();
+							lastSyncTimeRef.current = Date.now();
+							playbackStartTimeRef.current = null;
+							setIsPlaying(false);
+							setCurrentTime(time);
+							socketRef.current?.emit("sync_playback", {
+								room_id: roomId,
+								is_playing: false,
+								current_time: time,
+								user_name: identity?.name,
+							});
+						}
+					},
+				},
+			});
+		});
+
+		return () => {
+			cancelled = true;
+		};
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [currentParty?.media_type, currentParty?.youtube_video_id, isSharingScreen]);
+
+	// Drive the YouTube player from isPlaying, regardless of what triggered the
+	// change (manual header button, or a playback_sync/initial_sync from a peer)
+	useEffect(() => {
+		if (currentParty?.media_type !== "youtube") return;
+		const player = youtubePlayerRef.current;
+		if (!player || typeof player.playVideo !== "function") return;
+		if (isPlaying) {
+			player.playVideo();
+		} else {
+			player.pauseVideo();
+		}
+	}, [isPlaying, currentParty?.media_type]);
+
+	// Correct drift by seeking the YouTube player when a remote sync moved
+	// currentTime meaningfully out from under the local player's position.
+	useEffect(() => {
+		if (currentParty?.media_type !== "youtube" || !isSyncingRef.current) return;
+		const player = youtubePlayerRef.current;
+		if (!player || typeof player.seekTo !== "function") return;
+		const playerTime = player.getCurrentTime?.() ?? 0;
+		if (Math.abs(playerTime - currentTime) > 1.5) {
+			player.seekTo(currentTime, true);
+		}
+	}, [currentTime, currentParty?.media_type]);
+
+	// Tear down the YouTube player when leaving a youtube party / unmounting
+	useEffect(() => {
+		return () => {
+			if (youtubePlayerRef.current?.destroy) {
+				youtubePlayerRef.current.destroy();
+			}
+			youtubePlayerRef.current = null;
+		};
+	}, [roomId]);
+
 	const searchMovies = async () => {
 		if (!searchQuery.trim()) return;
 		try {
@@ -1089,30 +1345,48 @@ const WatchPartyPage = () => {
 	};
 
 	const createParty = async () => {
-		if (!selectedMovie || !partyName.trim()) {
-			toast.error("Please select a movie and enter a party name");
+		const isYoutube = createContentTab === "youtube";
+
+		if (!partyName.trim()) {
+			toast.error("Please enter a party name");
+			return;
+		}
+		if (isYoutube && !youtubeUrlInput.trim()) {
+			toast.error("Please paste a YouTube link or video ID");
+			return;
+		}
+		if (!isYoutube && !selectedMovie) {
+			toast.error("Please select a movie or show");
 			return;
 		}
 
-		try {
-			console.log("Creating party with:", {
+		let payload;
+		if (isYoutube) {
+			const videoId = extractYoutubeVideoId(youtubeUrlInput.trim());
+			if (!videoId) {
+				toast.error("Invalid YouTube URL. Paste a link or an 11-character video ID");
+				return;
+			}
+			payload = {
+				name: partyName,
+				media_type: "youtube",
+				youtube_video_id: videoId,
+			};
+		} else {
+			payload = {
 				name: partyName,
 				movie_id: selectedMovie.id,
 				media_type: selectedMovie.media_type || "movie",
-			});
+			};
+		}
 
-			const res = await axios.post(
-				`${API}/watch-party`,
-				{
-					name: partyName,
-					movie_id: selectedMovie.id,
-					media_type: selectedMovie.media_type || "movie",
-				},
-				{
-					headers: getAuthHeaders(),
-					withCredentials: true,
-				}
-			);
+		try {
+			console.log("Creating party with:", payload);
+
+			const res = await axios.post(`${API}/watch-party`, payload, {
+				headers: getAuthHeaders(),
+				withCredentials: true,
+			});
 
 			console.log("Party created:", res.data);
 			toast.success("Watch party created!");
@@ -1146,7 +1420,7 @@ const WatchPartyPage = () => {
 			room_id: roomId,
 			is_playing: newState,
 			current_time: currentTime,
-			user_name: user?.name,
+			user_name: identity?.name,
 		});
 		toast.success(newState ? "▶️ Resumed playback" : "⏸️ Paused playback");
 	};
@@ -1158,7 +1432,7 @@ const WatchPartyPage = () => {
 		socketRef.current?.emit("chat_message", {
 			room_id: roomId,
 			message: newMessage,
-			user_name: user?.name || "Anonymous",
+			user_name: identity?.name || "Anonymous",
 		});
 		setNewMessage("");
 	};
@@ -1171,9 +1445,11 @@ const WatchPartyPage = () => {
 
 	const shareToSocial = (platform) => {
 		const link = `${window.location.origin}/watch-party/${roomId}`;
-		const text = `Join my watch party on Flixzbox! We're watching ${
-			movieDetails?.title || movieDetails?.name
-		}`;
+		const whatWereWatching =
+			movieDetails?.title ||
+			movieDetails?.name ||
+			(currentParty?.media_type === "youtube" ? "a YouTube video" : "something");
+		const text = `Join my watch party on Flixzbox! We're watching ${whatWereWatching}`;
 
 		const urls = {
 			whatsapp: `https://wa.me/?text=${encodeURIComponent(text + " " + link)}`,
@@ -1244,7 +1520,7 @@ const WatchPartyPage = () => {
 			// Notify all participants via socket
 			socketRef.current?.emit("delete_party", {
 				room_id: roomId,
-				user_name: user?.name,
+				user_name: identity?.name,
 			});
 
 			toast.success("Watch party ended");
@@ -1266,6 +1542,9 @@ const WatchPartyPage = () => {
 	};
 
 	const getStreamingUrl = () => {
+		if (currentParty?.media_type === "youtube") {
+			return null; // YouTube parties render via the IFrame Player API, not this embed
+		}
 		if (selectedSource.id === "trailer") {
 			return null; // Will show trailer
 		}
@@ -1289,7 +1568,7 @@ const WatchPartyPage = () => {
 			is_playing: isPlaying,
 			current_time: currentTime,
 			source: STREAMING_SOURCES[nextIndex].id,
-			user_name: user?.name,
+			user_name: identity?.name,
 		});
 
 		toast.success(`Switched to ${STREAMING_SOURCES[nextIndex].name}`);
@@ -1310,10 +1589,47 @@ const WatchPartyPage = () => {
 			is_playing: isPlaying,
 			current_time: currentTime,
 			source: source.id,
-			user_name: user?.name,
+			user_name: identity?.name,
 		});
 
 		toast.success(`Switched to ${source.name}`);
+	};
+
+	const submitContentChange = () => {
+		const isYoutube = createContentTab === "youtube";
+
+		if (isYoutube) {
+			const videoId = extractYoutubeVideoId(youtubeUrlInput.trim());
+			if (!videoId) {
+				toast.error("Invalid YouTube URL. Paste a link or an 11-character video ID");
+				return;
+			}
+			socketRef.current?.emit("content_change", {
+				room_id: roomId,
+				media_type: "youtube",
+				movie_id: null,
+				youtube_video_id: videoId,
+				user_name: identity?.name,
+			});
+		} else {
+			if (!selectedMovie) {
+				toast.error("Please select a movie or show");
+				return;
+			}
+			socketRef.current?.emit("content_change", {
+				room_id: roomId,
+				media_type: selectedMovie.media_type || "movie",
+				movie_id: selectedMovie.id,
+				youtube_video_id: null,
+				user_name: identity?.name,
+			});
+		}
+
+		setChangeContentDialogOpen(false);
+		setYoutubeUrlInput("");
+		setSelectedMovie(null);
+		setSearchResults([]);
+		setSearchQuery("");
 	};
 
 	// List view
@@ -1357,63 +1673,106 @@ const WatchPartyPage = () => {
 										className="bg-black/50 border-white/10 text-sm md:text-base"
 									/>
 
-									<div className="flex flex-col sm:flex-row gap-2">
-										<Input
-											placeholder="Search for a movie or show..."
-											value={searchQuery}
-											onChange={(e) => setSearchQuery(e.target.value)}
-											onKeyDown={(e) => e.key === "Enter" && searchMovies()}
-											data-testid="movie-search-input"
-											className="bg-black/50 border-white/10 text-sm md:text-base"
-										/>
-										<Button
-											onClick={searchMovies}
-											variant="secondary"
-											className="sm:flex-shrink-0">
-											Search
-										</Button>
+									<div className="flex gap-2 p-1 bg-white/5 rounded-lg">
+										<button
+											type="button"
+											onClick={() => setCreateContentTab("browse")}
+											data-testid="tab-movies-tv"
+											className={`flex-1 py-2 rounded-md text-sm font-medium transition-all ${
+												createContentTab === "browse"
+													? "bg-[#7C3AED] text-white"
+													: "text-[#A1A1AA] hover:text-white"
+											}`}>
+											Movies & TV
+										</button>
+										<button
+											type="button"
+											onClick={() => setCreateContentTab("youtube")}
+											data-testid="tab-youtube"
+											className={`flex-1 py-2 rounded-md text-sm font-medium transition-all ${
+												createContentTab === "youtube"
+													? "bg-[#7C3AED] text-white"
+													: "text-[#A1A1AA] hover:text-white"
+											}`}>
+											YouTube
+										</button>
 									</div>
 
-									{searchResults.length > 0 && (
-										<div className="max-h-60 overflow-y-auto space-y-2">
-											{searchResults.slice(0, 5).map((item) => (
-												<div
-													key={item.id}
-													onClick={() => setSelectedMovie(item)}
-													data-testid={`search-result-${item.id}`}
-													className={`flex items-center gap-2 md:gap-3 p-2 rounded-lg cursor-pointer transition-all ${
-														selectedMovie?.id === item.id
-															? "bg-[#7C3AED]/20 border border-[#7C3AED]"
-															: "bg-white/5 hover:bg-white/10"
-													}`}>
-													{item.poster_path && (
-														<img
-															src={`${IMAGE_BASE}w92${item.poster_path}`}
-															alt={item.title || item.name}
-															className="w-10 h-14 md:w-12 md:h-16 object-cover rounded flex-shrink-0"
-														/>
-													)}
-													<div className="flex-1 min-w-0">
-														<p className="font-medium text-sm md:text-base truncate">
-															{item.title || item.name}
-														</p>
-														<p className="text-xs md:text-sm text-[#A1A1AA]">
-															{
-																(
-																	item.release_date || item.first_air_date
-																)?.split("-")[0]
-															}{" "}
-															• {item.media_type === "tv" ? "TV Show" : "Movie"}
-														</p>
-													</div>
+									{createContentTab === "youtube" ? (
+										<Input
+											placeholder="Paste a YouTube link or video ID..."
+											value={youtubeUrlInput}
+											onChange={(e) => setYoutubeUrlInput(e.target.value)}
+											onKeyDown={(e) => e.key === "Enter" && createParty()}
+											data-testid="youtube-url-input"
+											className="bg-black/50 border-white/10 text-sm md:text-base"
+										/>
+									) : (
+										<>
+											<div className="flex flex-col sm:flex-row gap-2">
+												<Input
+													placeholder="Search for a movie or show..."
+													value={searchQuery}
+													onChange={(e) => setSearchQuery(e.target.value)}
+													onKeyDown={(e) => e.key === "Enter" && searchMovies()}
+													data-testid="movie-search-input"
+													className="bg-black/50 border-white/10 text-sm md:text-base"
+												/>
+												<Button
+													onClick={searchMovies}
+													variant="secondary"
+													className="sm:flex-shrink-0">
+													Search
+												</Button>
+											</div>
+
+											{searchResults.length > 0 && (
+												<div className="max-h-60 overflow-y-auto space-y-2">
+													{searchResults.slice(0, 5).map((item) => (
+														<div
+															key={item.id}
+															onClick={() => setSelectedMovie(item)}
+															data-testid={`search-result-${item.id}`}
+															className={`flex items-center gap-2 md:gap-3 p-2 rounded-lg cursor-pointer transition-all ${
+																selectedMovie?.id === item.id
+																	? "bg-[#7C3AED]/20 border border-[#7C3AED]"
+																	: "bg-white/5 hover:bg-white/10"
+															}`}>
+															{item.poster_path && (
+																<img
+																	src={`${IMAGE_BASE}w92${item.poster_path}`}
+																	alt={item.title || item.name}
+																	className="w-10 h-14 md:w-12 md:h-16 object-cover rounded flex-shrink-0"
+																/>
+															)}
+															<div className="flex-1 min-w-0">
+																<p className="font-medium text-sm md:text-base truncate">
+																	{item.title || item.name}
+																</p>
+																<p className="text-xs md:text-sm text-[#A1A1AA]">
+																	{
+																		(
+																			item.release_date || item.first_air_date
+																		)?.split("-")[0]
+																	}{" "}
+																	• {item.media_type === "tv" ? "TV Show" : "Movie"}
+																</p>
+															</div>
+														</div>
+													))}
 												</div>
-											))}
-										</div>
+											)}
+										</>
 									)}
 
 									<Button
 										onClick={createParty}
-										disabled={!selectedMovie || !partyName.trim()}
+										disabled={
+											!partyName.trim() ||
+											(createContentTab === "youtube"
+												? !youtubeUrlInput.trim()
+												: !selectedMovie)
+										}
 										data-testid="confirm-create-party"
 										className="w-full btn-primary">
 										Create Party
@@ -1483,6 +1842,61 @@ const WatchPartyPage = () => {
 		);
 	}
 
+	// Guest name prompt - shown to anyone without an account or existing guest
+	// session before they can join the room, no login required.
+	if (roomId && !identity) {
+		return (
+			<div className="min-h-screen bg-[#050505] flex items-center justify-center px-4">
+				{loading ? (
+					<div className="w-12 h-12 border-4 border-[#7C3AED] border-t-transparent rounded-full animate-spin" />
+				) : (
+					<div className="glass rounded-xl p-6 md:p-8 max-w-sm w-full text-center">
+						<Users className="w-10 h-10 text-[#7C3AED] mx-auto mb-4" />
+						<h2 className="text-xl font-bold mb-1">
+							{guestPromptParty
+								? `Join "${guestPromptParty.name}"`
+								: "Join this watch party"}
+						</h2>
+						{guestPromptParty?.host_name && (
+							<p className="text-sm text-[#A1A1AA] mb-4">
+								Hosted by {guestPromptParty.host_name}
+							</p>
+						)}
+						<Input
+							autoFocus
+							placeholder="Your name..."
+							value={guestNameInput}
+							onChange={(e) => setGuestNameInput(e.target.value)}
+							onKeyDown={(e) => e.key === "Enter" && joinAsGuest()}
+							data-testid="guest-name-input"
+							className="bg-black/50 border-white/10 text-center mb-3"
+						/>
+						<Button
+							onClick={joinAsGuest}
+							disabled={joiningAsGuest || !guestNameInput.trim()}
+							data-testid="guest-join-btn"
+							className="w-full btn-primary">
+							{joiningAsGuest ? "Joining..." : "Join Party"}
+						</Button>
+						<p className="text-xs text-[#52525B] mt-4">
+							No account needed. Already have one?{" "}
+							<button
+								onClick={() =>
+									navigate(
+										"/login?redirect=" +
+											encodeURIComponent(`/watch-party/${roomId}`)
+									)
+								}
+								className="text-[#7C3AED] hover:underline">
+								Log in
+							</button>
+						</p>
+					</div>
+				)}
+			</div>
+		);
+	}
+
 	// Room view
 	if (loading) {
 		return (
@@ -1494,7 +1908,10 @@ const WatchPartyPage = () => {
 
 	const trailerKey = getTrailerUrl();
 	const streamingUrl = getStreamingUrl();
-	const title = movieDetails?.title || movieDetails?.name;
+	const title =
+		movieDetails?.title ||
+		movieDetails?.name ||
+		(currentParty?.media_type === "youtube" ? "YouTube video" : undefined);
 	const remoteStreamEntries = Object.entries(remoteStreams);
 
 	// Filter out the screen sharer from small video panels when viewing their screen
@@ -1504,8 +1921,10 @@ const WatchPartyPage = () => {
 
 	const showEmbeddedPlayer = streamingUrl && selectedSource.id !== "trailer";
 	const isCreator =
-		currentParty?.host_id === user?.user_id ||
-		currentParty?.host_name === user?.name;
+		!!identity &&
+		!identity.isGuest &&
+		(currentParty?.host_id === identity.id ||
+			currentParty?.host_name === identity.name);
 
 	return (
 		<div
@@ -1557,57 +1976,178 @@ const WatchPartyPage = () => {
 							<span className="hidden md:inline">{isPlaying ? "Pause" : "Play"}</span>
 						</button>
 
-						{/* Source Selector */}
-						<button
-							onClick={tryNextSource}
-							data-testid="try-next-source-btn"
-							className="hidden sm:flex items-center gap-2 px-2 md:px-3 py-2 rounded-full bg-[#7C3AED]/20 text-[#7C3AED] hover:bg-[#7C3AED]/30 transition-all text-sm">
-							<RefreshCw className="w-4 h-4" />
-							<span className="hidden md:inline">Try Next</span>
-						</button>
-						<div className="relative">
-							<button
-								onClick={() => setShowSourcePicker(!showSourcePicker)}
-								data-testid="source-picker-btn"
-								className="flex items-center gap-1 md:gap-2 px-2 md:px-3 py-2 rounded-full bg-white/10 hover:bg-white/20 transition-all text-sm">
-								<Server className="w-4 h-4" />
-								<span className="hidden md:inline">{selectedSource.name}</span>
-							</button>
+						{/* Source Selector - movie/TV only, YouTube parties don't use embed sources */}
+						{currentParty?.media_type !== "youtube" && (
+							<>
+								<button
+									onClick={tryNextSource}
+									data-testid="try-next-source-btn"
+									className="hidden sm:flex items-center gap-2 px-2 md:px-3 py-2 rounded-full bg-[#7C3AED]/20 text-[#7C3AED] hover:bg-[#7C3AED]/30 transition-all text-sm">
+									<RefreshCw className="w-4 h-4" />
+									<span className="hidden md:inline">Try Next</span>
+								</button>
+								<div className="relative">
+									<button
+										onClick={() => setShowSourcePicker(!showSourcePicker)}
+										data-testid="source-picker-btn"
+										className="flex items-center gap-1 md:gap-2 px-2 md:px-3 py-2 rounded-full bg-white/10 hover:bg-white/20 transition-all text-sm">
+										<Server className="w-4 h-4" />
+										<span className="hidden md:inline">{selectedSource.name}</span>
+									</button>
 
-							{/* Source Picker Dropdown */}
-							{showSourcePicker && (
-								<div className="absolute right-0 top-full mt-2 bg-[#0A0A0A] border border-white/10 rounded-xl p-2 z-50 min-w-[200px] max-w-[280px] shadow-xl">
-									<p className="text-xs text-[#A1A1AA] px-3 py-2">
-										Select Streaming Source
-									</p>
-									<div className="max-h-[320px] overflow-y-auto">
-										{STREAMING_SOURCES.map((source, index) => (
-											<button
-												key={source.id}
-												onClick={() => changeSource(source, index)}
-												data-testid={`source-${source.id}`}
-												className={`w-full text-left px-3 md:px-4 py-2 rounded-lg transition-all flex items-center gap-2 text-sm ${
-													selectedSource.id === source.id
-														? "bg-[#7C3AED] text-white"
-														: "hover:bg-white/5"
-												}`}>
-												{source.id === "trailer" ? (
-													<Film className="w-4 h-4 flex-shrink-0" />
-												) : (
-													<Monitor className="w-4 h-4 flex-shrink-0" />
-												)}
-												<span className="flex-1 truncate">{source.name}</span>
-												{index < 3 && source.id !== "trailer" && (
-													<span className="text-xs bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded flex-shrink-0">
-														Popular
-													</span>
-												)}
-											</button>
-										))}
-									</div>
+									{/* Source Picker Dropdown */}
+									{showSourcePicker && (
+										<div className="absolute right-0 top-full mt-2 bg-[#0A0A0A] border border-white/10 rounded-xl p-2 z-50 min-w-[200px] max-w-[280px] shadow-xl">
+											<p className="text-xs text-[#A1A1AA] px-3 py-2">
+												Select Streaming Source
+											</p>
+											<div className="max-h-[320px] overflow-y-auto">
+												{STREAMING_SOURCES.map((source, index) => (
+													<button
+														key={source.id}
+														onClick={() => changeSource(source, index)}
+														data-testid={`source-${source.id}`}
+														className={`w-full text-left px-3 md:px-4 py-2 rounded-lg transition-all flex items-center gap-2 text-sm ${
+															selectedSource.id === source.id
+																? "bg-[#7C3AED] text-white"
+																: "hover:bg-white/5"
+														}`}>
+														{source.id === "trailer" ? (
+															<Film className="w-4 h-4 flex-shrink-0" />
+														) : (
+															<Monitor className="w-4 h-4 flex-shrink-0" />
+														)}
+														<span className="flex-1 truncate">{source.name}</span>
+														{index < 3 && source.id !== "trailer" && (
+															<span className="text-xs bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded flex-shrink-0">
+																Popular
+															</span>
+														)}
+													</button>
+												))}
+											</div>
+										</div>
+									)}
 								</div>
-							)}
-						</div>
+							</>
+						)}
+
+						{/* Change Content (Host Only) */}
+						{isCreator && (
+							<Dialog
+								open={changeContentDialogOpen}
+								onOpenChange={setChangeContentDialogOpen}>
+								<DialogTrigger asChild>
+									<button
+										data-testid="change-content-btn"
+										className="flex items-center gap-1 md:gap-2 px-2 md:px-3 py-2 rounded-full bg-white/10 hover:bg-white/20 transition-all text-sm">
+										<RefreshCw className="w-4 h-4" />
+										<span className="hidden md:inline">Change</span>
+									</button>
+								</DialogTrigger>
+								<DialogContent className="bg-[#0A0A0A] border-white/10 max-w-lg mx-4">
+									<DialogHeader>
+										<DialogTitle className="text-lg md:text-xl">
+											Change What's Playing
+										</DialogTitle>
+									</DialogHeader>
+									<div className="space-y-4 mt-4">
+										<div className="flex gap-2 p-1 bg-white/5 rounded-lg">
+											<button
+												type="button"
+												onClick={() => setCreateContentTab("browse")}
+												className={`flex-1 py-2 rounded-md text-sm font-medium transition-all ${
+													createContentTab === "browse"
+														? "bg-[#7C3AED] text-white"
+														: "text-[#A1A1AA] hover:text-white"
+												}`}>
+												Movies & TV
+											</button>
+											<button
+												type="button"
+												onClick={() => setCreateContentTab("youtube")}
+												className={`flex-1 py-2 rounded-md text-sm font-medium transition-all ${
+													createContentTab === "youtube"
+														? "bg-[#7C3AED] text-white"
+														: "text-[#A1A1AA] hover:text-white"
+												}`}>
+												YouTube
+											</button>
+										</div>
+
+										{createContentTab === "youtube" ? (
+											<Input
+												placeholder="Paste a YouTube link or video ID..."
+												value={youtubeUrlInput}
+												onChange={(e) => setYoutubeUrlInput(e.target.value)}
+												onKeyDown={(e) => e.key === "Enter" && submitContentChange()}
+												className="bg-black/50 border-white/10 text-sm md:text-base"
+											/>
+										) : (
+											<>
+												<div className="flex flex-col sm:flex-row gap-2">
+													<Input
+														placeholder="Search for a movie or show..."
+														value={searchQuery}
+														onChange={(e) => setSearchQuery(e.target.value)}
+														onKeyDown={(e) => e.key === "Enter" && searchMovies()}
+														className="bg-black/50 border-white/10 text-sm md:text-base"
+													/>
+													<Button
+														onClick={searchMovies}
+														variant="secondary"
+														className="sm:flex-shrink-0">
+														Search
+													</Button>
+												</div>
+
+												{searchResults.length > 0 && (
+													<div className="max-h-60 overflow-y-auto space-y-2">
+														{searchResults.slice(0, 5).map((item) => (
+															<div
+																key={item.id}
+																onClick={() => setSelectedMovie(item)}
+																className={`flex items-center gap-2 md:gap-3 p-2 rounded-lg cursor-pointer transition-all ${
+																	selectedMovie?.id === item.id
+																		? "bg-[#7C3AED]/20 border border-[#7C3AED]"
+																		: "bg-white/5 hover:bg-white/10"
+																}`}>
+																{item.poster_path && (
+																	<img
+																		src={`${IMAGE_BASE}w92${item.poster_path}`}
+																		alt={item.title || item.name}
+																		className="w-10 h-14 md:w-12 md:h-16 object-cover rounded flex-shrink-0"
+																	/>
+																)}
+																<div className="flex-1 min-w-0">
+																	<p className="font-medium text-sm md:text-base truncate">
+																		{item.title || item.name}
+																	</p>
+																	<p className="text-xs md:text-sm text-[#A1A1AA]">
+																		{
+																			(
+																				item.release_date || item.first_air_date
+																			)?.split("-")[0]
+																		}{" "}
+																		• {item.media_type === "tv" ? "TV Show" : "Movie"}
+																	</p>
+																</div>
+															</div>
+														))}
+													</div>
+												)}
+											</>
+										)}
+
+										<Button
+											onClick={submitContentChange}
+											className="w-full btn-primary">
+											Switch
+										</Button>
+									</div>
+								</DialogContent>
+							</Dialog>
+						)}
 
 						<button
 							onClick={copyRoomLink}
@@ -1642,46 +2182,48 @@ const WatchPartyPage = () => {
 							</div>
 						</div>
 
-						{/* Invite Dialog */}
-						<Dialog open={inviteDialogOpen} onOpenChange={setInviteDialogOpen}>
-							<DialogTrigger asChild>
-								<button className="btn-primary flex items-center gap-1 md:gap-2 px-2 md:px-3 py-2 text-sm">
-									<Plus className="w-3 h-3 md:w-4 md:h-4" />
-									<span className="hidden sm:inline">Invite</span>
-								</button>
-							</DialogTrigger>
-							<DialogContent className="bg-[#0A0A0A] border-white/10 mx-4 max-w-md">
-								<DialogHeader>
-									<DialogTitle className="text-lg md:text-xl">
-										Invite Friends
-									</DialogTitle>
-								</DialogHeader>
-								<div className="space-y-4 mt-4">
-									<div className="bg-[#7C3AED]/10 border border-[#7C3AED]/20 rounded-lg p-3">
-										<p className="text-xs md:text-sm text-[#A1A1AA]">
-											💡 <span className="text-white">Tip:</span> If your friend
-											has a Flixzbox account, they'll receive a notification.
-											Otherwise, use the{" "}
-											<span className="text-[#7C3AED]">Copy Link</span> button
-											to share directly!
-										</p>
+						{/* Invite Dialog - email invites require a Flixz account, guests
+						    can still use Copy Link / Share above */}
+						{!identity?.isGuest && (
+							<Dialog open={inviteDialogOpen} onOpenChange={setInviteDialogOpen}>
+								<DialogTrigger asChild>
+									<button className="btn-primary flex items-center gap-1 md:gap-2 px-2 md:px-3 py-2 text-sm">
+										<Plus className="w-3 h-3 md:w-4 md:h-4" />
+										<span className="hidden sm:inline">Invite</span>
+									</button>
+								</DialogTrigger>
+								<DialogContent className="bg-[#0A0A0A] border-white/10 mx-4 max-w-md">
+									<DialogHeader>
+										<DialogTitle className="text-lg md:text-xl">
+											Invite Friends
+										</DialogTitle>
+									</DialogHeader>
+									<div className="space-y-4 mt-4">
+										<div className="bg-[#7C3AED]/10 border border-[#7C3AED]/20 rounded-lg p-3">
+											<p className="text-xs md:text-sm text-[#A1A1AA]">
+												💡 <span className="text-white">Tip:</span> Anyone with
+												the <span className="text-[#7C3AED]">Copy Link</span> can
+												join instantly, account or not. If your friend has a
+												Flixzbox account, they'll also get a notification below.
+											</p>
+										</div>
+										<Input
+											placeholder="Enter friend's email..."
+											value={inviteEmail}
+											onChange={(e) => setInviteEmail(e.target.value)}
+											onKeyDown={(e) => e.key === "Enter" && sendInvite()}
+											data-testid="invite-email-input"
+											className="bg-black/50 border-white/10 text-sm md:text-base"
+										/>
+										<Button
+											onClick={sendInvite}
+											className="w-full btn-primary text-sm md:text-base">
+											Send Invitation
+										</Button>
 									</div>
-									<Input
-										placeholder="Enter friend's email..."
-										value={inviteEmail}
-										onChange={(e) => setInviteEmail(e.target.value)}
-										onKeyDown={(e) => e.key === "Enter" && sendInvite()}
-										data-testid="invite-email-input"
-										className="bg-black/50 border-white/10 text-sm md:text-base"
-									/>
-									<Button
-										onClick={sendInvite}
-										className="w-full btn-primary text-sm md:text-base">
-										Send Invitation
-									</Button>
-								</div>
-							</DialogContent>
-						</Dialog>
+								</DialogContent>
+							</Dialog>
+						)}
 
 						{/* Delete Party Button (Creator Only) */}
 						{isCreator && (
@@ -1745,7 +2287,12 @@ const WatchPartyPage = () => {
 							</div>
 
 							{/* Regular video player */}
-							{showEmbeddedPlayer ? (
+							{currentParty?.media_type === "youtube" ? (
+								<div
+									ref={youtubeContainerRef}
+									className="w-full h-full min-h-[250px] md:min-h-[400px]"
+								/>
+							) : showEmbeddedPlayer ? (
 								<iframe
 									src={streamingUrl}
 									className="w-full h-full min-h-[250px] md:min-h-[400px]"
@@ -1793,7 +2340,12 @@ const WatchPartyPage = () => {
 						/* Normal view - no screen sharing active */
 						<>
 							{/* Embedded Streaming Player (default) */}
-							{showEmbeddedPlayer ? (
+							{currentParty?.media_type === "youtube" ? (
+								<div
+									ref={youtubeContainerRef}
+									className="w-full h-full min-h-[250px] md:min-h-[400px]"
+								/>
+							) : showEmbeddedPlayer ? (
 								<iframe
 									src={streamingUrl}
 									className="w-full h-full min-h-[250px] md:min-h-[400px]"
@@ -1876,7 +2428,7 @@ const WatchPartyPage = () => {
 									{!isVideoEnabled && (
 										<div className="absolute inset-0 bg-[#121212] flex items-center justify-center">
 											<div className="w-12 h-12 rounded-full bg-[#7C3AED] flex items-center justify-center text-xl font-bold">
-												{user?.name?.charAt(0).toUpperCase()}
+												{identity?.name?.charAt(0).toUpperCase()}
 											</div>
 										</div>
 									)}
@@ -1889,18 +2441,18 @@ const WatchPartyPage = () => {
 						</div>
 					)}
 
-					{/* Remote Participant Videos Overlay - Show small videos when viewing screen share */}
+					{/* Remote Participant Videos Overlay - full gallery of everyone in the call, no cap */}
 					{isInCall && filteredRemoteStreams.length > 0 && (
 						<div
-							className={`absolute ${
+							className={`absolute flex flex-wrap gap-2 justify-end overflow-y-auto ${
 								activeScreenShare && !isSharingScreen
-									? "bottom-24 md:bottom-20 left-3 md:left-4" // Move to bottom-left when viewing screen share
+									? "bottom-24 md:bottom-20 left-3 md:left-4 max-w-[70vw] max-h-[30vh]" // Move to bottom-left when viewing screen share
 									: isVideoFullscreen
-									? "top-6 right-4"
-									: "top-16 md:top-20 right-3 md:right-4"
-							} ${activeScreenShare && !isSharingScreen ? "flex gap-2" : "space-y-2"}`}
+									? "top-6 right-4 max-w-[50vw] max-h-[70vh]"
+									: "top-16 md:top-20 right-3 md:right-4 max-w-[60vw] max-h-[60vh]"
+							}`}
 							style={{ zIndex: 2147483647 }}>
-							{filteredRemoteStreams.slice(0, 3).map(([peerId, stream]) => (
+							{filteredRemoteStreams.map(([peerId, stream]) => (
 								<div
 									key={peerId}
 									className={`${
@@ -1940,16 +2492,6 @@ const WatchPartyPage = () => {
 									</div>
 								</div>
 							))}
-							{filteredRemoteStreams.length > 3 && (
-								<div
-									className={`${
-										isVideoFullscreen
-											? "w-40 h-10 sm:w-48 sm:h-12 md:w-56 md:h-12"
-											: "w-32 h-10 sm:w-40 sm:h-10 md:w-48 md:h-12"
-									} rounded-lg bg-black/80 flex items-center justify-center text-xs sm:text-sm`}>
-									+{filteredRemoteStreams.length - 3} more
-								</div>
-							)}
 						</div>
 					)}
 
@@ -1967,12 +2509,14 @@ const WatchPartyPage = () => {
 					</button>
 
 					{/* Current source indicator - positioned to avoid blocking video controls */}
-					<div
-						className="absolute top-3 left-3 md:top-4 md:left-4 px-2 py-1 md:px-3 md:py-1.5 rounded-full bg-black/70 backdrop-blur-sm text-xs md:text-sm flex items-center gap-1 md:gap-2"
-						style={{ zIndex: 10 }}>
-						<Server className="w-3 h-3 md:w-4 md:h-4 text-[#7C3AED]" />
-						<span className="hidden sm:inline">{selectedSource.name}</span>
-					</div>
+					{currentParty?.media_type !== "youtube" && (
+						<div
+							className="absolute top-3 left-3 md:top-4 md:left-4 px-2 py-1 md:px-3 md:py-1.5 rounded-full bg-black/70 backdrop-blur-sm text-xs md:text-sm flex items-center gap-1 md:gap-2"
+							style={{ zIndex: 10 }}>
+							<Server className="w-3 h-3 md:w-4 md:h-4 text-[#7C3AED]" />
+							<span className="hidden sm:inline">{selectedSource.name}</span>
+						</div>
+					)}
 				</div>
 
 				{/* Video Call Controls Section */}

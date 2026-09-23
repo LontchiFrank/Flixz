@@ -97,14 +97,19 @@ class TokenResponse(BaseModel):
 
 class WatchPartyCreate(BaseModel):
     name: str
-    movie_id: int
     media_type: str = "movie"
+    movie_id: Optional[int] = None
+    youtube_video_id: Optional[str] = None
+
+class GuestJoinRequest(BaseModel):
+    name: str
 
 class WatchPartyResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
     room_id: str
     name: str
-    movie_id: int
+    movie_id: Optional[int] = None
+    youtube_video_id: Optional[str] = None
     media_type: str
     host_id: str
     host_name: str
@@ -112,7 +117,7 @@ class WatchPartyResponse(BaseModel):
     is_playing: bool = False
     current_time: float = 0.0
     current_source: Optional[str] = None
-    participants: List[Dict[str, str]] = []
+    participants: List[Dict[str, Any]] = []
 
 class MyListItem(BaseModel):
     media_id: int
@@ -568,22 +573,32 @@ async def update_continue_watching(item: ContinueWatchingItem, user: dict = Depe
 
 @api_router.post("/watch-party", response_model=WatchPartyResponse)
 async def create_watch_party(data: WatchPartyCreate, user: dict = Depends(get_current_user)):
+    if data.media_type not in ("movie", "tv", "youtube"):
+        raise HTTPException(status_code=400, detail="Invalid media_type")
+
+    if data.media_type == "youtube":
+        if not data.youtube_video_id:
+            raise HTTPException(status_code=400, detail="youtube_video_id is required for youtube parties")
+    elif not data.movie_id:
+        raise HTTPException(status_code=400, detail="movie_id is required")
+
     room_id = f"room_{uuid.uuid4().hex[:8]}"
-    
+
     party = {
         "room_id": room_id,
         "name": data.name,
         "movie_id": data.movie_id,
+        "youtube_video_id": data.youtube_video_id,
         "media_type": data.media_type,
         "host_id": user["user_id"],
         "host_name": user["name"],
         "created_at": datetime.now(timezone.utc).isoformat(),
         "is_playing": False,
         "current_time": 0.0,
-        "current_source": "vidsrcxyz",  # Default to first source
-        "participants": [{"user_id": user["user_id"], "name": user["name"]}]
+        "current_source": "vidsrcxyz" if data.media_type != "youtube" else None,  # Default to first source
+        "participants": [{"user_id": user["user_id"], "name": user["name"], "is_guest": False}]
     }
-    
+
     await db.watch_parties.insert_one(party)
     party["created_at"] = datetime.fromisoformat(party["created_at"])
     return WatchPartyResponse(**party)
@@ -615,6 +630,27 @@ async def join_watch_party(room_id: str, user: dict = Depends(get_current_user))
         )
     
     return {"message": "Joined party"}
+
+@api_router.post("/watch-party/{room_id}/guest-join")
+async def guest_join_watch_party(room_id: str, data: GuestJoinRequest):
+    """Let anyone with the room link join without a Flixz account."""
+    party = await db.watch_parties.find_one({"room_id": room_id})
+    if not party:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    name = data.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required")
+
+    guest_id = f"guest_{uuid.uuid4().hex[:10]}"
+    participants = party.get("participants", [])
+    participants.append({"user_id": guest_id, "name": name, "is_guest": True})
+    await db.watch_parties.update_one(
+        {"room_id": room_id},
+        {"$set": {"participants": participants}}
+    )
+
+    return {"user_id": guest_id, "name": name}
 
 @api_router.delete("/watch-party/{room_id}")
 async def delete_watch_party(room_id: str, user: dict = Depends(get_current_user)):
@@ -680,7 +716,10 @@ async def join_room(sid, data):
         await sio.emit('initial_sync', {
             'is_playing': party.get('is_playing', False),
             'current_time': party.get('current_time', 0.0),
-            'source': party.get('current_source')
+            'source': party.get('current_source'),
+            'media_type': party.get('media_type'),
+            'movie_id': party.get('movie_id'),
+            'youtube_video_id': party.get('youtube_video_id')
         }, to=sid)
 
     await sio.emit('user_joined', {'user_name': user_name}, room=room_id)
@@ -724,6 +763,31 @@ async def sync_playback(sid, data):
         broadcast_data['source'] = source
 
     await sio.emit('playback_sync', broadcast_data, room=room_id, skip_sid=sid)
+
+@sio.event
+async def content_change(sid, data):
+    """Host swaps what a party is watching (movie/TV <-> YouTube) mid-session"""
+    room_id = data.get('room_id')
+    media_type = data.get('media_type')
+    movie_id = data.get('movie_id')
+    youtube_video_id = data.get('youtube_video_id')
+    user_name = data.get('user_name')
+
+    update_data = {
+        "media_type": media_type,
+        "movie_id": movie_id,
+        "youtube_video_id": youtube_video_id,
+        "is_playing": False,
+        "current_time": 0.0,
+    }
+    await db.watch_parties.update_one({"room_id": room_id}, {"$set": update_data})
+
+    await sio.emit('content_changed', {
+        'media_type': media_type,
+        'movie_id': movie_id,
+        'youtube_video_id': youtube_video_id,
+        'user_name': user_name
+    }, room=room_id)
 
 @sio.event
 async def position_update(sid, data):
