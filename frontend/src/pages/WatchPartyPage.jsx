@@ -217,11 +217,23 @@ const WatchPartyPage = () => {
 	const isSyncingRef = useRef(false); // Prevent sync loops
 	const youtubePlayerRef = useRef(null); // YT.Player instance for youtube-content parties
 	const youtubeContainerRef = useRef(null);
+	// Always-current mirror of isPlaying/currentTime. The YouTube player is
+	// created asynchronously (loading the IFrame API, then constructing
+	// YT.Player), so a sync (initial_sync on join, playback_sync, etc.) can
+	// arrive and update React state before the player exists. onReady must
+	// read this ref rather than close over isPlaying/currentTime directly -
+	// a closure captured when the player-creation effect ran would still be
+	// holding whatever those values were at that moment, not the latest sync.
+	const latestPlaybackRef = useRef({ isPlaying: false, currentTime: 0 });
 
 	// Keep localStreamRef in sync with localStream state
 	useEffect(() => {
 		localStreamRef.current = localStream;
 	}, [localStream]);
+
+	useEffect(() => {
+		latestPlaybackRef.current = { isPlaying, currentTime };
+	}, [isPlaying, currentTime]);
 
 	// WebRTC Functions - Fixed for two-way video
 	const createPeerConnection = useCallback(
@@ -1250,8 +1262,15 @@ const WatchPartyPage = () => {
 				playerVars: { autoplay: 0, controls: 1, rel: 0 },
 				events: {
 					onReady: (event) => {
-						if (currentTime) event.target.seekTo(currentTime, true);
-						if (isPlaying) event.target.playVideo();
+						// Read the ref, not the closured currentTime/isPlaying - a
+						// sync can have arrived and updated state after this
+						// effect started (the player takes a moment to load) but
+						// before onReady actually fires, and closing over the
+						// effect's own render would miss it.
+						const { isPlaying: latestIsPlaying, currentTime: latestTime } =
+							latestPlaybackRef.current;
+						if (latestTime) event.target.seekTo(latestTime, true);
+						if (latestIsPlaying) event.target.playVideo();
 					},
 					onStateChange: (event) => {
 						// Ignore state changes we caused ourselves via a remote sync

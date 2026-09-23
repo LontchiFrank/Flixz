@@ -595,6 +595,7 @@ async def create_watch_party(data: WatchPartyCreate, user: dict = Depends(get_cu
         "created_at": datetime.now(timezone.utc).isoformat(),
         "is_playing": False,
         "current_time": 0.0,
+        "playback_updated_at": time.time(),
         "current_source": "vidsrcxyz" if data.media_type != "youtube" else None,  # Default to first source
         "participants": [{"user_id": user["user_id"], "name": user["name"], "is_guest": False}]
     }
@@ -711,11 +712,23 @@ async def join_room(sid, data):
     # Get current party state from database
     party = await db.watch_parties.find_one({"room_id": room_id})
 
-    # Send current playback state to the joining user
+    # Send current playback state to the joining user as a one-off targeted
+    # message (not a room broadcast) - this is what actually gets a guest
+    # joining mid-playback, or a tab that just reconnected, caught up to
+    # where everyone else already is instead of loading at 0:00/paused.
     if party:
+        is_playing = party.get('is_playing', False)
+        current_time = party.get('current_time', 0.0)
+        updated_at = party.get('playback_updated_at')
+
+        # If playback was left running, account for time elapsed since that
+        # position was last recorded so a late joiner doesn't start behind.
+        if is_playing and updated_at:
+            current_time += max(0.0, time.time() - updated_at)
+
         await sio.emit('initial_sync', {
-            'is_playing': party.get('is_playing', False),
-            'current_time': party.get('current_time', 0.0),
+            'is_playing': is_playing,
+            'current_time': current_time,
             'source': party.get('current_source'),
             'media_type': party.get('media_type'),
             'movie_id': party.get('movie_id'),
@@ -744,7 +757,11 @@ async def sync_playback(sid, data):
     user_name = data.get('user_name')
 
     # Update database
-    update_data = {"is_playing": is_playing, "current_time": current_time}
+    update_data = {
+        "is_playing": is_playing,
+        "current_time": current_time,
+        "playback_updated_at": time.time(),
+    }
     if source:
         update_data["current_source"] = source
 
@@ -779,6 +796,7 @@ async def content_change(sid, data):
         "youtube_video_id": youtube_video_id,
         "is_playing": False,
         "current_time": 0.0,
+        "playback_updated_at": time.time(),
     }
     await db.watch_parties.update_one({"room_id": room_id}, {"$set": update_data})
 
@@ -800,7 +818,11 @@ async def position_update(sid, data):
     # Update database with latest position (lightweight update)
     await db.watch_parties.update_one(
         {"room_id": room_id},
-        {"$set": {"current_time": current_time, "is_playing": is_playing}}
+        {"$set": {
+            "current_time": current_time,
+            "is_playing": is_playing,
+            "playback_updated_at": time.time(),
+        }}
     )
 
     # Broadcast position to all participants except sender
