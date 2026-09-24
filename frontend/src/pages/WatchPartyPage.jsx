@@ -187,6 +187,13 @@ const WatchPartyPage = () => {
 	const [isVideoFullscreen, setIsVideoFullscreen] = useState(false);
 	const [isSharingScreen, setIsSharingScreen] = useState(false);
 	const [screenStream, setScreenStream] = useState(null);
+	// Drag position for the local camera PiP, in px from the video container's
+	// top-left. null = use the default corner position. The native player
+	// underneath (YouTube's own controls, or another embed's) can put its
+	// volume/fullscreen buttons anywhere, so letting people drag the camera
+	// box out of the way beats guessing a corner that's never in the way.
+	const [pipOffset, setPipOffset] = useState(null);
+	const pipDragRef = useRef({ dragging: false });
 
 	// Screen sharing state (for main view)
 	const [activeScreenShare, setActiveScreenShare] = useState(null); // { sid, name, stream }
@@ -412,6 +419,7 @@ const WatchPartyPage = () => {
 		// Clear remote streams
 		setRemoteStreams({});
 		setIsInCall(false);
+		setPipOffset(null);
 
 		// Notify server
 		socketRef.current?.emit("webrtc_leave", { room_id: roomId });
@@ -1223,10 +1231,67 @@ const WatchPartyPage = () => {
 		}
 	};
 
+	// Drag-to-reposition the local camera PiP, so it can be moved off of
+	// whatever the underlying video player's own controls happen to sit on.
+	const handlePipPointerDown = (e) => {
+		const container = videoPlayerRef.current;
+		const pipEl = e.currentTarget;
+		if (!container) return;
+
+		const containerRect = container.getBoundingClientRect();
+		const pipRect = pipEl.getBoundingClientRect();
+
+		pipDragRef.current = {
+			dragging: true,
+			pointerId: e.pointerId,
+			startClientX: e.clientX,
+			startClientY: e.clientY,
+			startLeft: pipRect.left - containerRect.left,
+			startTop: pipRect.top - containerRect.top,
+			pipWidth: pipRect.width,
+			pipHeight: pipRect.height,
+		};
+		pipEl.setPointerCapture(e.pointerId);
+	};
+
+	const handlePipPointerMove = (e) => {
+		const drag = pipDragRef.current;
+		if (!drag.dragging) return;
+
+		const container = videoPlayerRef.current;
+		if (!container) return;
+
+		const dx = e.clientX - drag.startClientX;
+		const dy = e.clientY - drag.startClientY;
+
+		const containerRect = container.getBoundingClientRect();
+		const maxLeft = Math.max(0, containerRect.width - drag.pipWidth);
+		const maxTop = Math.max(0, containerRect.height - drag.pipHeight);
+
+		setPipOffset({
+			x: Math.min(Math.max(0, drag.startLeft + dx), maxLeft),
+			y: Math.min(Math.max(0, drag.startTop + dy), maxTop),
+		});
+	};
+
+	const handlePipPointerUp = (e) => {
+		const drag = pipDragRef.current;
+		try {
+			e.currentTarget.releasePointerCapture(drag.pointerId ?? e.pointerId);
+		} catch {
+			// pointer capture may already be released (e.g. pointercancel)
+		}
+		pipDragRef.current = { dragging: false };
+	};
+
 	// Listen for fullscreen changes
 	useEffect(() => {
 		const handleFullscreenChange = () => {
 			setIsVideoFullscreen(!!document.fullscreenElement);
+			// The video container's size changes drastically on fullscreen
+			// enter/exit - a dragged pixel position from one no longer means
+			// anything in the other, so fall back to the safe default corner.
+			setPipOffset(null);
 		};
 
 		document.addEventListener("fullscreenchange", handleFullscreenChange);
@@ -2415,12 +2480,27 @@ const WatchPartyPage = () => {
 					{/* Picture-in-Picture Video Overlay (Your Video) - Hidden during screen share viewing */}
 					{isInCall && !(activeScreenShare && !isSharingScreen) && (
 						<div
-							className={`absolute ${
+							onPointerDown={handlePipPointerDown}
+							onPointerMove={handlePipPointerMove}
+							onPointerUp={handlePipPointerUp}
+							onPointerCancel={handlePipPointerUp}
+							title="Drag to move"
+							className={`absolute select-none ${
 								isVideoFullscreen
-									? "bottom-6 right-4 w-40 h-32 sm:w-48 sm:h-36 md:w-56 md:h-40"
-									: "bottom-24 md:bottom-20 right-3 md:right-4 w-32 h-24 sm:w-40 sm:h-32 md:w-48 md:h-36"
-							} rounded-lg overflow-hidden border-2 border-[#7C3AED] shadow-2xl bg-[#121212]`}
-							style={{ zIndex: 2147483647 }}>
+									? "w-40 h-32 sm:w-48 sm:h-36 md:w-56 md:h-40"
+									: "w-32 h-24 sm:w-40 sm:h-32 md:w-48 md:h-36"
+							} ${
+								pipOffset
+									? ""
+									: isVideoFullscreen
+									? "bottom-6 right-4"
+									: "bottom-24 md:bottom-20 right-3 md:right-4"
+							} rounded-lg overflow-hidden border-2 border-[#7C3AED] shadow-2xl bg-[#121212] cursor-grab active:cursor-grabbing`}
+							style={{
+								zIndex: 2147483647,
+								touchAction: "none",
+								...(pipOffset ? { top: pipOffset.y, left: pipOffset.x } : {}),
+							}}>
 							{localStream ? (
 								<>
 									<video
@@ -2428,7 +2508,8 @@ const WatchPartyPage = () => {
 										muted
 										playsInline
 										controls={false}
-										className="w-full h-full object-cover bg-black"
+										draggable={false}
+										className="w-full h-full object-cover bg-black pointer-events-none"
 										style={{ transform: "scaleX(-1)" }}
 										onLoadedMetadata={(e) => {
 											const videoEl = e.target;
@@ -2514,11 +2595,13 @@ const WatchPartyPage = () => {
 						</div>
 					)}
 
-					{/* Fullscreen toggle */}
+					{/* Fullscreen toggle - rendered after (and at the same max z-index as)
+					    the camera overlays above, so DOM order lets it always win and
+					    stay clickable even if a camera tile is dragged over this corner */}
 					<button
 						onClick={toggleFullscreen}
 						className="absolute top-3 right-3 md:top-4 md:right-4 w-9 h-9 md:w-10 md:h-10 rounded-full bg-black/50 flex items-center justify-center hover:bg-black/70 transition-all"
-						style={{ zIndex: 2147483646 }}
+						style={{ zIndex: 2147483647 }}
 						title={isVideoFullscreen ? "Exit fullscreen" : "Enter fullscreen"}>
 						{isVideoFullscreen ? (
 							<Minimize2 className="w-4 h-4 md:w-5 md:h-5" />
