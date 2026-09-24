@@ -131,6 +131,68 @@ const loadYoutubeIframeApi = () => {
 	return youtubeApiPromise;
 };
 
+// Drag-to-reposition for a floating overlay (camera PiP, remote gallery)
+// within a given container ref. Returns a px offset from the container's
+// top-left (null = caller should use its own default CSS position) plus
+// pointer handlers to spread onto the draggable element.
+const useDraggableOverlay = (containerRef) => {
+	const [offset, setOffset] = useState(null);
+	const dragRef = useRef({ dragging: false });
+
+	const onPointerDown = (e) => {
+		const container = containerRef.current;
+		const el = e.currentTarget;
+		if (!container) return;
+
+		const containerRect = container.getBoundingClientRect();
+		const elRect = el.getBoundingClientRect();
+
+		dragRef.current = {
+			dragging: true,
+			pointerId: e.pointerId,
+			startClientX: e.clientX,
+			startClientY: e.clientY,
+			startLeft: elRect.left - containerRect.left,
+			startTop: elRect.top - containerRect.top,
+			elWidth: elRect.width,
+			elHeight: elRect.height,
+		};
+		el.setPointerCapture(e.pointerId);
+	};
+
+	const onPointerMove = (e) => {
+		const drag = dragRef.current;
+		if (!drag.dragging) return;
+
+		const container = containerRef.current;
+		if (!container) return;
+
+		const dx = e.clientX - drag.startClientX;
+		const dy = e.clientY - drag.startClientY;
+
+		const containerRect = container.getBoundingClientRect();
+		const maxLeft = Math.max(0, containerRect.width - drag.elWidth);
+		const maxTop = Math.max(0, containerRect.height - drag.elHeight);
+
+		setOffset({
+			x: Math.min(Math.max(0, drag.startLeft + dx), maxLeft),
+			y: Math.min(Math.max(0, drag.startTop + dy), maxTop),
+		});
+	};
+
+	const onPointerUp = (e) => {
+		const drag = dragRef.current;
+		try {
+			e.currentTarget.releasePointerCapture(drag.pointerId ?? e.pointerId);
+		} catch {
+			// pointer capture may already be released (e.g. pointercancel)
+		}
+		dragRef.current = { dragging: false };
+	};
+
+	return { offset, setOffset, onPointerDown, onPointerMove, onPointerUp };
+};
+
 const WatchPartyPage = () => {
 	const { roomId } = useParams();
 	const navigate = useNavigate();
@@ -187,14 +249,6 @@ const WatchPartyPage = () => {
 	const [isVideoFullscreen, setIsVideoFullscreen] = useState(false);
 	const [isSharingScreen, setIsSharingScreen] = useState(false);
 	const [screenStream, setScreenStream] = useState(null);
-	// Drag position for the local camera PiP, in px from the video container's
-	// top-left. null = use the default corner position. The native player
-	// underneath (YouTube's own controls, or another embed's) can put its
-	// volume/fullscreen buttons anywhere, so letting people drag the camera
-	// box out of the way beats guessing a corner that's never in the way.
-	const [pipOffset, setPipOffset] = useState(null);
-	const pipDragRef = useRef({ dragging: false });
-
 	// Screen sharing state (for main view)
 	const [activeScreenShare, setActiveScreenShare] = useState(null); // { sid, name, stream }
 	const [screenShareStreams, setScreenShareStreams] = useState({}); // Map of sid -> screen stream
@@ -224,6 +278,16 @@ const WatchPartyPage = () => {
 	const isSyncingRef = useRef(false); // Prevent sync loops
 	const youtubePlayerRef = useRef(null); // YT.Player instance for youtube-content parties
 	const youtubeContainerRef = useRef(null);
+
+	// Drag-to-reposition for the camera PiP and the remote-guest gallery, so
+	// either can be moved off of whatever the underlying video player's own
+	// controls happen to sit on. Both overlays sit at the same max z-index;
+	// without this, if they ever geometrically overlap (e.g. a shorter
+	// browser window, since the PiP anchors from the bottom and the gallery
+	// from the top), the one later in the DOM silently eats every pointer
+	// event in that region and the one underneath becomes unreachable.
+	const pipDrag = useDraggableOverlay(videoPlayerRef);
+	const galleryDrag = useDraggableOverlay(videoPlayerRef);
 	// Always-current mirror of isPlaying/currentTime. The YouTube player is
 	// created asynchronously (loading the IFrame API, then constructing
 	// YT.Player), so a sync (initial_sync on join, playback_sync, etc.) can
@@ -419,11 +483,12 @@ const WatchPartyPage = () => {
 		// Clear remote streams
 		setRemoteStreams({});
 		setIsInCall(false);
-		setPipOffset(null);
+		pipDrag.setOffset(null);
+		galleryDrag.setOffset(null);
 
 		// Notify server
 		socketRef.current?.emit("webrtc_leave", { room_id: roomId });
-	}, [localStream, screenStream, roomId]);
+	}, [localStream, screenStream, roomId, pipDrag, galleryDrag]);
 
 	const fetchParties = useCallback(async () => {
 		setLoading(true);
@@ -1231,59 +1296,6 @@ const WatchPartyPage = () => {
 		}
 	};
 
-	// Drag-to-reposition the local camera PiP, so it can be moved off of
-	// whatever the underlying video player's own controls happen to sit on.
-	const handlePipPointerDown = (e) => {
-		const container = videoPlayerRef.current;
-		const pipEl = e.currentTarget;
-		if (!container) return;
-
-		const containerRect = container.getBoundingClientRect();
-		const pipRect = pipEl.getBoundingClientRect();
-
-		pipDragRef.current = {
-			dragging: true,
-			pointerId: e.pointerId,
-			startClientX: e.clientX,
-			startClientY: e.clientY,
-			startLeft: pipRect.left - containerRect.left,
-			startTop: pipRect.top - containerRect.top,
-			pipWidth: pipRect.width,
-			pipHeight: pipRect.height,
-		};
-		pipEl.setPointerCapture(e.pointerId);
-	};
-
-	const handlePipPointerMove = (e) => {
-		const drag = pipDragRef.current;
-		if (!drag.dragging) return;
-
-		const container = videoPlayerRef.current;
-		if (!container) return;
-
-		const dx = e.clientX - drag.startClientX;
-		const dy = e.clientY - drag.startClientY;
-
-		const containerRect = container.getBoundingClientRect();
-		const maxLeft = Math.max(0, containerRect.width - drag.pipWidth);
-		const maxTop = Math.max(0, containerRect.height - drag.pipHeight);
-
-		setPipOffset({
-			x: Math.min(Math.max(0, drag.startLeft + dx), maxLeft),
-			y: Math.min(Math.max(0, drag.startTop + dy), maxTop),
-		});
-	};
-
-	const handlePipPointerUp = (e) => {
-		const drag = pipDragRef.current;
-		try {
-			e.currentTarget.releasePointerCapture(drag.pointerId ?? e.pointerId);
-		} catch {
-			// pointer capture may already be released (e.g. pointercancel)
-		}
-		pipDragRef.current = { dragging: false };
-	};
-
 	// Listen for fullscreen changes
 	useEffect(() => {
 		const handleFullscreenChange = () => {
@@ -1291,13 +1303,18 @@ const WatchPartyPage = () => {
 			// The video container's size changes drastically on fullscreen
 			// enter/exit - a dragged pixel position from one no longer means
 			// anything in the other, so fall back to the safe default corner.
-			setPipOffset(null);
+			pipDrag.setOffset(null);
+			galleryDrag.setOffset(null);
 		};
 
 		document.addEventListener("fullscreenchange", handleFullscreenChange);
 		return () => {
 			document.removeEventListener("fullscreenchange", handleFullscreenChange);
 		};
+		// pipDrag.setOffset/galleryDrag.setOffset are stable useState setters
+		// (same guarantee as any other setState function) even though the
+		// wrapping pipDrag/galleryDrag object is a new reference each render
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
 	// Set up the YouTube IFrame Player for youtube-content parties. Unlike the
@@ -1323,10 +1340,30 @@ const WatchPartyPage = () => {
 			}
 
 			youtubePlayerRef.current = new YT.Player(youtubeContainerRef.current, {
+				// Without explicit width/height, the API defaults to its native
+				// 640x360 iframe box instead of filling the responsive container -
+				// on a narrower viewport that overflows the layout and throws off
+				// everything positioned relative to the video area on top of it.
+				width: "100%",
+				height: "100%",
 				videoId: currentParty.youtube_video_id,
 				playerVars: { autoplay: 0, controls: 1, rel: 0 },
 				events: {
 					onReady: (event) => {
+						// The width/height passed to YT.Player() above become HTML
+						// attributes, which a flex layout can still let the iframe's
+						// own content size push through to (a flex item's default
+						// min-width:auto refuses to shrink below content size) -
+						// pulling the iframe out of flow with position:absolute is
+						// what actually guarantees it can never widen its container.
+						const iframeEl = event.target.getIframe?.();
+						if (iframeEl) {
+							iframeEl.style.position = "absolute";
+							iframeEl.style.inset = "0";
+							iframeEl.style.width = "100%";
+							iframeEl.style.height = "100%";
+						}
+
 						// Read the ref, not the closured currentTime/isPlaying - a
 						// sync can have arrived and updated state after this
 						// effect started (the player takes a moment to load) but
@@ -2034,7 +2071,7 @@ const WatchPartyPage = () => {
 							</p>
 						</div>
 					</div>
-					<div className="flex items-center gap-1 md:gap-2 flex-shrink-0">
+					<div className="flex items-center gap-1 md:gap-2 min-w-0 overflow-x-auto">
 						{/* Mobile Chat Toggle */}
 						<button
 							onClick={() => setIsChatOpen(!isChatOpen)}
@@ -2374,7 +2411,7 @@ const WatchPartyPage = () => {
 							{currentParty?.media_type === "youtube" ? (
 								<div
 									ref={youtubeContainerRef}
-									className="w-full h-full min-h-[250px] md:min-h-[400px]"
+									className="w-full h-full min-h-[250px] md:min-h-[400px] overflow-hidden relative"
 								/>
 							) : showEmbeddedPlayer ? (
 								<iframe
@@ -2427,7 +2464,7 @@ const WatchPartyPage = () => {
 							{currentParty?.media_type === "youtube" ? (
 								<div
 									ref={youtubeContainerRef}
-									className="w-full h-full min-h-[250px] md:min-h-[400px]"
+									className="w-full h-full min-h-[250px] md:min-h-[400px] overflow-hidden relative"
 								/>
 							) : showEmbeddedPlayer ? (
 								<iframe
@@ -2480,17 +2517,17 @@ const WatchPartyPage = () => {
 					{/* Picture-in-Picture Video Overlay (Your Video) - Hidden during screen share viewing */}
 					{isInCall && !(activeScreenShare && !isSharingScreen) && (
 						<div
-							onPointerDown={handlePipPointerDown}
-							onPointerMove={handlePipPointerMove}
-							onPointerUp={handlePipPointerUp}
-							onPointerCancel={handlePipPointerUp}
+							onPointerDown={pipDrag.onPointerDown}
+							onPointerMove={pipDrag.onPointerMove}
+							onPointerUp={pipDrag.onPointerUp}
+							onPointerCancel={pipDrag.onPointerUp}
 							title="Drag to move"
 							className={`absolute select-none ${
 								isVideoFullscreen
 									? "w-40 h-32 sm:w-48 sm:h-36 md:w-56 md:h-40"
 									: "w-32 h-24 sm:w-40 sm:h-32 md:w-48 md:h-36"
 							} ${
-								pipOffset
+								pipDrag.offset
 									? ""
 									: isVideoFullscreen
 									? "bottom-6 right-4"
@@ -2499,7 +2536,9 @@ const WatchPartyPage = () => {
 							style={{
 								zIndex: 2147483647,
 								touchAction: "none",
-								...(pipOffset ? { top: pipOffset.y, left: pipOffset.x } : {}),
+								...(pipDrag.offset
+									? { top: pipDrag.offset.y, left: pipDrag.offset.x }
+									: {}),
 							}}>
 							{localStream ? (
 								<>
@@ -2544,14 +2583,44 @@ const WatchPartyPage = () => {
 					{/* Remote Participant Videos Overlay - full gallery of everyone in the call, no cap */}
 					{isInCall && filteredRemoteStreams.length > 0 && (
 						<div
-							className={`absolute flex flex-wrap gap-2 justify-end overflow-y-auto ${
-								activeScreenShare && !isSharingScreen
-									? "bottom-24 md:bottom-20 left-3 md:left-4 max-w-[70vw] max-h-[30vh]" // Move to bottom-left when viewing screen share
+							className={`absolute flex flex-col gap-1 ${
+								galleryDrag.offset
+									? ""
+									: activeScreenShare && !isSharingScreen
+									? "bottom-24 md:bottom-20 left-3 md:left-4" // Move to bottom-left when viewing screen share
 									: isVideoFullscreen
-									? "top-6 right-4 max-w-[50vw] max-h-[70vh]"
-									: "top-16 md:top-20 right-3 md:right-4 max-w-[60vw] max-h-[60vh]"
+									? "top-6 right-4"
+									: "top-16 md:top-20 right-3 md:right-4"
 							}`}
-							style={{ zIndex: 2147483647 }}>
+							style={{
+								zIndex: 2147483647,
+								...(galleryDrag.offset
+									? { top: galleryDrag.offset.y, left: galleryDrag.offset.x }
+									: {}),
+							}}>
+							{/* Drag handle - a thin grip bar, separate from the scrollable
+							    tiles below so dragging the gallery doesn't fight with
+							    scrolling through it when there are many participants */}
+							<div
+								onPointerDown={galleryDrag.onPointerDown}
+								onPointerMove={galleryDrag.onPointerMove}
+								onPointerUp={galleryDrag.onPointerUp}
+								onPointerCancel={galleryDrag.onPointerUp}
+								title="Drag to move"
+								className="self-end flex items-center justify-center gap-0.5 px-3 py-1 rounded-full bg-black/70 select-none cursor-grab active:cursor-grabbing"
+								style={{ touchAction: "none" }}>
+								<span className="w-1 h-1 rounded-full bg-white/60" />
+								<span className="w-1 h-1 rounded-full bg-white/60" />
+								<span className="w-1 h-1 rounded-full bg-white/60" />
+							</div>
+							<div
+								className={`flex flex-wrap gap-2 justify-end overflow-y-auto ${
+									activeScreenShare && !isSharingScreen
+										? "max-w-[70vw] max-h-[30vh]"
+										: isVideoFullscreen
+										? "max-w-[50vw] max-h-[70vh]"
+										: "max-w-[60vw] max-h-[60vh]"
+								}`}>
 							{filteredRemoteStreams.map(([peerId, stream]) => (
 								<div
 									key={peerId}
@@ -2592,6 +2661,7 @@ const WatchPartyPage = () => {
 									</div>
 								</div>
 							))}
+							</div>
 						</div>
 					)}
 
