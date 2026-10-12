@@ -6,28 +6,12 @@ import axios from "axios";
 import { io } from "socket.io-client";
 import { toast } from "sonner";
 import {
-	Play,
-	Pause,
 	Users,
-	Send,
-	Copy,
 	Share2,
 	ChevronLeft,
 	Plus,
 	X,
-	Video,
-	VideoOff,
-	Mic,
-	MicOff,
-	PhoneOff,
-	Maximize2,
-	Minimize2,
 	Link2,
-	Server,
-	Monitor,
-	MonitorUp,
-	MonitorStop,
-	Film,
 	RefreshCw,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
@@ -41,6 +25,7 @@ import {
 	DialogTitle,
 	DialogTrigger,
 } from "../components/ui/dialog";
+import WatchPartyRoom from "../components/watch-party/WatchPartyRoom";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const IMAGE_BASE = "https://image.tmdb.org/t/p/";
@@ -131,68 +116,6 @@ const loadYoutubeIframeApi = () => {
 	return youtubeApiPromise;
 };
 
-// Drag-to-reposition for a floating overlay (camera PiP, remote gallery)
-// within a given container ref. Returns a px offset from the container's
-// top-left (null = caller should use its own default CSS position) plus
-// pointer handlers to spread onto the draggable element.
-const useDraggableOverlay = (containerRef) => {
-	const [offset, setOffset] = useState(null);
-	const dragRef = useRef({ dragging: false });
-
-	const onPointerDown = (e) => {
-		const container = containerRef.current;
-		const el = e.currentTarget;
-		if (!container) return;
-
-		const containerRect = container.getBoundingClientRect();
-		const elRect = el.getBoundingClientRect();
-
-		dragRef.current = {
-			dragging: true,
-			pointerId: e.pointerId,
-			startClientX: e.clientX,
-			startClientY: e.clientY,
-			startLeft: elRect.left - containerRect.left,
-			startTop: elRect.top - containerRect.top,
-			elWidth: elRect.width,
-			elHeight: elRect.height,
-		};
-		el.setPointerCapture(e.pointerId);
-	};
-
-	const onPointerMove = (e) => {
-		const drag = dragRef.current;
-		if (!drag.dragging) return;
-
-		const container = containerRef.current;
-		if (!container) return;
-
-		const dx = e.clientX - drag.startClientX;
-		const dy = e.clientY - drag.startClientY;
-
-		const containerRect = container.getBoundingClientRect();
-		const maxLeft = Math.max(0, containerRect.width - drag.elWidth);
-		const maxTop = Math.max(0, containerRect.height - drag.elHeight);
-
-		setOffset({
-			x: Math.min(Math.max(0, drag.startLeft + dx), maxLeft),
-			y: Math.min(Math.max(0, drag.startTop + dy), maxTop),
-		});
-	};
-
-	const onPointerUp = (e) => {
-		const drag = dragRef.current;
-		try {
-			e.currentTarget.releasePointerCapture(drag.pointerId ?? e.pointerId);
-		} catch {
-			// pointer capture may already be released (e.g. pointercancel)
-		}
-		dragRef.current = { dragging: false };
-	};
-
-	return { offset, setOffset, onPointerDown, onPointerMove, onPointerUp };
-};
-
 const WatchPartyPage = () => {
 	const { roomId } = useParams();
 	const navigate = useNavigate();
@@ -246,9 +169,17 @@ const WatchPartyPage = () => {
 	const [remoteStreams, setRemoteStreams] = useState({});
 	const [isVideoEnabled, setIsVideoEnabled] = useState(true);
 	const [isAudioEnabled, setIsAudioEnabled] = useState(true);
-	const [isVideoFullscreen, setIsVideoFullscreen] = useState(false);
 	const [isSharingScreen, setIsSharingScreen] = useState(false);
 	const [screenStream, setScreenStream] = useState(null);
+	// Peer display names and mic/cam status, keyed by socket sid - both are
+	// already broadcast by the backend (webrtc_peers/webrtc_peer_joined carry
+	// user_name, webrtc_media_toggle carries type/enabled) but were previously
+	// only used for a toast / logged and discarded. Real tiles need them.
+	const [peerNames, setPeerNames] = useState({});
+	const [peerMediaState, setPeerMediaState] = useState({});
+	// YouTube-only: true while the player reports BUFFERING, for the loading
+	// spinner. Movie/TV embeds have no such signal (see WatchPartyPlayer).
+	const [isBuffering, setIsBuffering] = useState(false);
 	// Screen sharing state (for main view)
 	const [activeScreenShare, setActiveScreenShare] = useState(null); // { sid, name, stream }
 	const [screenShareStreams, setScreenShareStreams] = useState({}); // Map of sid -> screen stream
@@ -270,7 +201,8 @@ const WatchPartyPage = () => {
 	const chatRef = useRef(null);
 	const localVideoRef = useRef(null);
 	const peerConnectionsRef = useRef({});
-	const videoPlayerRef = useRef(null);
+	// Fullscreen target (previously this player-section ref) now lives inside
+	// WatchPartyRoom, which owns a container wrapping cameras+controls+chat too.
 	const localStreamRef = useRef(null); // Keep stream in ref for stable access
 	const pendingCandidatesRef = useRef({}); // Store ICE candidates before connection ready
 	const playbackStartTimeRef = useRef(null); // Track when playback started
@@ -279,15 +211,9 @@ const WatchPartyPage = () => {
 	const youtubePlayerRef = useRef(null); // YT.Player instance for youtube-content parties
 	const youtubeContainerRef = useRef(null);
 
-	// Drag-to-reposition for the camera PiP and the remote-guest gallery, so
-	// either can be moved off of whatever the underlying video player's own
-	// controls happen to sit on. Both overlays sit at the same max z-index;
-	// without this, if they ever geometrically overlap (e.g. a shorter
-	// browser window, since the PiP anchors from the bottom and the gallery
-	// from the top), the one later in the DOM silently eats every pointer
-	// event in that region and the one underneath becomes unreachable.
-	const pipDrag = useDraggableOverlay(videoPlayerRef);
-	const galleryDrag = useDraggableOverlay(videoPlayerRef);
+	// Floating-layout camera dragging is now owned per-tile inside
+	// FloatingParticipantLayer (see components/watch-party/), each with its
+	// own useDraggableOverlay instance - no drag state lives here anymore.
 	// Always-current mirror of isPlaying/currentTime. The YouTube player is
 	// created asynchronously (loading the IFrame API, then constructing
 	// YT.Player), so a sync (initial_sync on join, playback_sync, etc.) can
@@ -483,12 +409,12 @@ const WatchPartyPage = () => {
 		// Clear remote streams
 		setRemoteStreams({});
 		setIsInCall(false);
-		pipDrag.setOffset(null);
-		galleryDrag.setOffset(null);
+		// Floating camera tiles unmount with isInCall, which drops their drag
+		// offsets for free - no manual reset needed here anymore.
 
 		// Notify server
 		socketRef.current?.emit("webrtc_leave", { room_id: roomId });
-	}, [localStream, screenStream, roomId, pipDrag, galleryDrag]);
+	}, [localStream, screenStream, roomId]);
 
 	const fetchParties = useCallback(async () => {
 		setLoading(true);
@@ -871,6 +797,11 @@ const WatchPartyPage = () => {
 				data.peers.length,
 				"peers"
 			);
+			setPeerNames((prev) => {
+				const next = { ...prev };
+				for (const peer of data.peers) next[peer.sid] = peer.user_name;
+				return next;
+			});
 			// Don't create offers here - existing peers will send us offers via webrtc_peer_joined
 			// Just log that we're expecting offers from these peers
 			for (const peer of data.peers) {
@@ -886,6 +817,7 @@ const WatchPartyPage = () => {
 		socketRef.current.on("webrtc_peer_joined", async (data) => {
 			console.log("👋 New peer joined:", data.user_name, "sid:", data.sid);
 			toast.info(`${data.user_name} joined the video call`);
+			setPeerNames((prev) => ({ ...prev, [data.sid]: data.user_name }));
 
 			// If we're in a call, create an offer to the new peer so they can see us
 			if (localStreamRef.current) {
@@ -922,6 +854,16 @@ const WatchPartyPage = () => {
 				delete updated[data.sid];
 				return updated;
 			});
+			setPeerNames((prev) => {
+				const updated = { ...prev };
+				delete updated[data.sid];
+				return updated;
+			});
+			setPeerMediaState((prev) => {
+				const updated = { ...prev };
+				delete updated[data.sid];
+				return updated;
+			});
 		});
 
 		socketRef.current.on("webrtc_ice_candidate", async (data) => {
@@ -944,7 +886,10 @@ const WatchPartyPage = () => {
 		});
 
 		socketRef.current.on("webrtc_media_toggle", (data) => {
-			console.log("Media toggle:", data);
+			setPeerMediaState((prev) => ({
+				...prev,
+				[data.sid]: { ...prev[data.sid], [data.type]: data.enabled },
+			}));
 		});
 
 		// Screen sharing events
@@ -1277,45 +1222,11 @@ const WatchPartyPage = () => {
 		toast.info("Screen sharing stopped");
 	};
 
-	const toggleFullscreen = async () => {
-		if (!videoPlayerRef.current) return;
-
-		try {
-			if (!document.fullscreenElement) {
-				// Enter fullscreen
-				await videoPlayerRef.current.requestFullscreen();
-				setIsVideoFullscreen(true);
-			} else {
-				// Exit fullscreen
-				await document.exitFullscreen();
-				setIsVideoFullscreen(false);
-			}
-		} catch (error) {
-			console.error("Fullscreen error:", error);
-			toast.error("Failed to toggle fullscreen");
-		}
-	};
-
-	// Listen for fullscreen changes
-	useEffect(() => {
-		const handleFullscreenChange = () => {
-			setIsVideoFullscreen(!!document.fullscreenElement);
-			// The video container's size changes drastically on fullscreen
-			// enter/exit - a dragged pixel position from one no longer means
-			// anything in the other, so fall back to the safe default corner.
-			pipDrag.setOffset(null);
-			galleryDrag.setOffset(null);
-		};
-
-		document.addEventListener("fullscreenchange", handleFullscreenChange);
-		return () => {
-			document.removeEventListener("fullscreenchange", handleFullscreenChange);
-		};
-		// pipDrag.setOffset/galleryDrag.setOffset are stable useState setters
-		// (same guarantee as any other setState function) even though the
-		// wrapping pipDrag/galleryDrag object is a new reference each render
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, []);
+	// Fullscreen is now owned by WatchPartyRoom (components/watch-party/),
+	// which requests fullscreen on a container wrapping the player+cameras+
+	// controls+chat together, per the redesign's explicit requirement that
+	// camera overlays and controls stay visible while fullscreen - the old
+	// player-section-only fullscreen target here is gone.
 
 	// Set up the YouTube IFrame Player for youtube-content parties. Unlike the
 	// vidsrc-style embeds (opaque third-party iframes with no control API),
@@ -1375,6 +1286,12 @@ const WatchPartyPage = () => {
 						if (latestIsPlaying) event.target.playVideo();
 					},
 					onStateChange: (event) => {
+						// Buffering reflects reality regardless of who triggered the
+						// state change, so it's tracked outside the sync-echo guard
+						// below (which only exists to stop us re-broadcasting a sync
+						// event we just received).
+						setIsBuffering(event.data === window.YT.PlayerState.BUFFERING);
+
 						// Ignore state changes we caused ourselves via a remote sync
 						if (isSyncingRef.current) return;
 
@@ -1544,6 +1461,22 @@ const WatchPartyPage = () => {
 			user_name: identity?.name,
 		});
 		toast.success(newState ? "▶️ Resumed playback" : "⏸️ Paused playback");
+	};
+
+	// Custom progress-bar seek (YouTube only - seekTo() is called directly by
+	// the player control for instant feedback; this just broadcasts the new
+	// position, mirroring the same fields the onStateChange sync already
+	// sends after any play/pause transition).
+	const handleYoutubeSeek = (time) => {
+		lastSyncTimeRef.current = Date.now();
+		playbackStartTimeRef.current = isPlaying ? Date.now() : null;
+		setCurrentTime(time);
+		socketRef.current?.emit("sync_playback", {
+			room_id: roomId,
+			is_playing: isPlaying,
+			current_time: time,
+			user_name: identity?.name,
+		});
 	};
 
 	const sendMessage = (e) => {
@@ -2046,833 +1979,256 @@ const WatchPartyPage = () => {
 		!identity.isGuest &&
 		(currentParty?.host_id === identity.id ||
 			currentParty?.host_name === identity.name);
+	const remoteScreenShareStream = activeScreenShare
+		? remoteStreams[activeScreenShare.sid]
+		: null;
 
-	return (
-		<div
-			className="w-full bg-[#050505] pb-16 md:pb-0 flex"
-			data-testid="watch-party-room">
-			{/* Main Section */}
-			<div className="relative flex flex-col min-h-screen w-full">
-				{/* Header */}
-				<div className="p-3 md:p-4 flex items-center justify-between border-b border-white/10">
-					<div className="flex items-center gap-2 md:gap-4 flex-1 min-w-0">
+	// Room-level actions (content switching, invite, share, delete) - these
+	// stay exactly as they were, just handed to WatchPartyRoom as a slot
+	// instead of being inlined into a hand-rolled header. Playback-specific
+	// controls (play/pause, source picker) moved into WatchPartyPlayer's own
+	// overlaid control bar, matching the redesign's two-layer structure.
+	const headerActions = (
+		<>
+			{isCreator && (
+				<Dialog open={changeContentDialogOpen} onOpenChange={setChangeContentDialogOpen}>
+					<DialogTrigger asChild>
 						<button
-							onClick={() => navigate("/watch-party")}
-							data-testid="back-to-list"
-							className="w-9 h-9 md:w-10 md:h-10 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/20 transition-all flex-shrink-0">
-							<ChevronLeft className="w-4 h-4 md:w-5 md:h-5" />
-						</button>
-						<div className="min-w-0 flex-1">
-							<h2 className="font-semibold text-sm md:text-base truncate">
-								{currentParty?.name}
-							</h2>
-							<p className="text-xs md:text-sm text-[#A1A1AA] truncate">
-								{title}
-							</p>
-						</div>
-					</div>
-					<div className="flex items-center gap-1 md:gap-2 min-w-0 overflow-x-auto">
-						{/* Mobile Chat Toggle */}
-						<button
-							onClick={() => setIsChatOpen(!isChatOpen)}
-							className="lg:hidden w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 transition-all flex items-center justify-center relative"
-							title="Toggle chat">
-							<Send className="w-4 h-4" />
-							{messages.length > 0 && (
-								<span className="absolute -top-1 -right-1 w-3 h-3 bg-[#7C3AED] rounded-full" />
-							)}
-						</button>
-
-						{/* Play/Pause Sync */}
-						<button
-							onClick={togglePlayback}
-							data-testid="toggle-playback-btn"
-							title={isPlaying ? "Pause for everyone" : "Play for everyone"}
+							data-testid="change-content-btn"
 							className="flex items-center gap-1 md:gap-2 px-2 md:px-3 py-2 rounded-full bg-white/10 hover:bg-white/20 transition-all text-sm">
-							{isPlaying ? (
-								<Pause className="w-4 h-4" />
-							) : (
-								<Play className="w-4 h-4" />
-							)}
-							<span className="hidden md:inline">{isPlaying ? "Pause" : "Play"}</span>
+							<RefreshCw className="w-4 h-4" />
+							<span className="hidden md:inline">Change</span>
 						</button>
-
-						{/* Source Selector - movie/TV only, YouTube parties don't use embed sources */}
-						{currentParty?.media_type !== "youtube" && (
-							<>
-								<button
-									onClick={tryNextSource}
-									data-testid="try-next-source-btn"
-									className="hidden sm:flex items-center gap-2 px-2 md:px-3 py-2 rounded-full bg-[#7C3AED]/20 text-[#7C3AED] hover:bg-[#7C3AED]/30 transition-all text-sm">
-									<RefreshCw className="w-4 h-4" />
-									<span className="hidden md:inline">Try Next</span>
-								</button>
-								<div className="relative">
-									<button
-										onClick={() => setShowSourcePicker(!showSourcePicker)}
-										data-testid="source-picker-btn"
-										className="flex items-center gap-1 md:gap-2 px-2 md:px-3 py-2 rounded-full bg-white/10 hover:bg-white/20 transition-all text-sm">
-										<Server className="w-4 h-4" />
-										<span className="hidden md:inline">{selectedSource.name}</span>
-									</button>
-
-									{/* Source Picker Dropdown */}
-									{showSourcePicker && (
-										<div className="absolute right-0 top-full mt-2 bg-[#0A0A0A] border border-white/10 rounded-xl p-2 z-50 min-w-[200px] max-w-[280px] shadow-xl">
-											<p className="text-xs text-[#A1A1AA] px-3 py-2">
-												Select Streaming Source
-											</p>
-											<div className="max-h-[320px] overflow-y-auto">
-												{STREAMING_SOURCES.map((source, index) => (
-													<button
-														key={source.id}
-														onClick={() => changeSource(source, index)}
-														data-testid={`source-${source.id}`}
-														className={`w-full text-left px-3 md:px-4 py-2 rounded-lg transition-all flex items-center gap-2 text-sm ${
-															selectedSource.id === source.id
-																? "bg-[#7C3AED] text-white"
-																: "hover:bg-white/5"
-														}`}>
-														{source.id === "trailer" ? (
-															<Film className="w-4 h-4 flex-shrink-0" />
-														) : (
-															<Monitor className="w-4 h-4 flex-shrink-0" />
-														)}
-														<span className="flex-1 truncate">{source.name}</span>
-														{index < 3 && source.id !== "trailer" && (
-															<span className="text-xs bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded flex-shrink-0">
-																Popular
-															</span>
-														)}
-													</button>
-												))}
-											</div>
-										</div>
-									)}
-								</div>
-							</>
-						)}
-
-						{/* Change Content (Host Only) */}
-						{isCreator && (
-							<Dialog
-								open={changeContentDialogOpen}
-								onOpenChange={setChangeContentDialogOpen}>
-								<DialogTrigger asChild>
-									<button
-										data-testid="change-content-btn"
-										className="flex items-center gap-1 md:gap-2 px-2 md:px-3 py-2 rounded-full bg-white/10 hover:bg-white/20 transition-all text-sm">
-										<RefreshCw className="w-4 h-4" />
-										<span className="hidden md:inline">Change</span>
-									</button>
-								</DialogTrigger>
-								<DialogContent className="bg-[#0A0A0A] border-white/10 max-w-lg mx-4">
-									<DialogHeader>
-										<DialogTitle className="text-lg md:text-xl">
-											Change What's Playing
-										</DialogTitle>
-									</DialogHeader>
-									<div className="space-y-4 mt-4">
-										<div className="flex gap-2 p-1 bg-white/5 rounded-lg">
-											<button
-												type="button"
-												onClick={() => setCreateContentTab("browse")}
-												className={`flex-1 py-2 rounded-md text-sm font-medium transition-all ${
-													createContentTab === "browse"
-														? "bg-[#7C3AED] text-white"
-														: "text-[#A1A1AA] hover:text-white"
-												}`}>
-												Movies & TV
-											</button>
-											<button
-												type="button"
-												onClick={() => setCreateContentTab("youtube")}
-												className={`flex-1 py-2 rounded-md text-sm font-medium transition-all ${
-													createContentTab === "youtube"
-														? "bg-[#7C3AED] text-white"
-														: "text-[#A1A1AA] hover:text-white"
-												}`}>
-												YouTube
-											</button>
-										</div>
-
-										{createContentTab === "youtube" ? (
-											<Input
-												placeholder="Paste a YouTube link or video ID..."
-												value={youtubeUrlInput}
-												onChange={(e) => setYoutubeUrlInput(e.target.value)}
-												onKeyDown={(e) => e.key === "Enter" && submitContentChange()}
-												className="bg-black/50 border-white/10 text-sm md:text-base"
-											/>
-										) : (
-											<>
-												<div className="flex flex-col sm:flex-row gap-2">
-													<Input
-														placeholder="Search for a movie or show..."
-														value={searchQuery}
-														onChange={(e) => setSearchQuery(e.target.value)}
-														onKeyDown={(e) => e.key === "Enter" && searchMovies()}
-														className="bg-black/50 border-white/10 text-sm md:text-base"
-													/>
-													<Button
-														onClick={searchMovies}
-														variant="secondary"
-														className="sm:flex-shrink-0">
-														Search
-													</Button>
-												</div>
-
-												{searchResults.length > 0 && (
-													<div className="max-h-60 overflow-y-auto space-y-2">
-														{searchResults.slice(0, 5).map((item) => (
-															<div
-																key={item.id}
-																onClick={() => setSelectedMovie(item)}
-																className={`flex items-center gap-2 md:gap-3 p-2 rounded-lg cursor-pointer transition-all ${
-																	selectedMovie?.id === item.id
-																		? "bg-[#7C3AED]/20 border border-[#7C3AED]"
-																		: "bg-white/5 hover:bg-white/10"
-																}`}>
-																{item.poster_path && (
-																	<img
-																		src={`${IMAGE_BASE}w92${item.poster_path}`}
-																		alt={item.title || item.name}
-																		className="w-10 h-14 md:w-12 md:h-16 object-cover rounded flex-shrink-0"
-																	/>
-																)}
-																<div className="flex-1 min-w-0">
-																	<p className="font-medium text-sm md:text-base truncate">
-																		{item.title || item.name}
-																	</p>
-																	<p className="text-xs md:text-sm text-[#A1A1AA]">
-																		{
-																			(
-																				item.release_date || item.first_air_date
-																			)?.split("-")[0]
-																		}{" "}
-																		• {item.media_type === "tv" ? "TV Show" : "Movie"}
-																	</p>
-																</div>
-															</div>
-														))}
-													</div>
-												)}
-											</>
-										)}
-
-										<Button
-											onClick={submitContentChange}
-											className="w-full btn-primary">
-											Switch
-										</Button>
-									</div>
-								</DialogContent>
-							</Dialog>
-						)}
-
-						<button
-							onClick={copyRoomLink}
-							data-testid="copy-link-btn"
-							className="btn-secondary flex items-center gap-1 md:gap-2 px-2 md:px-3 py-2 text-sm">
-							<Link2 className="w-4 h-4" />
-							<span className="hidden lg:inline">Copy Link</span>
-						</button>
-
-						{/* Share dropdown */}
-						<div className="relative group hidden sm:block">
-							<button className="btn-secondary flex items-center gap-1 md:gap-2 px-2 md:px-3 py-2 text-sm">
-								<Share2 className="w-4 h-4" />
-								<span className="hidden lg:inline">Share</span>
-							</button>
-							<div className="absolute right-0 top-full mt-2 bg-[#0A0A0A] border border-white/10 rounded-lg p-2 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 min-w-[150px]">
-								<button
-									onClick={() => shareToSocial("whatsapp")}
-									className="w-full text-left px-3 py-2 rounded hover:bg-white/5 text-sm">
-									WhatsApp
-								</button>
-								<button
-									onClick={() => shareToSocial("twitter")}
-									className="w-full text-left px-3 py-2 rounded hover:bg-white/5 text-sm">
-									Twitter
-								</button>
-								<button
-									onClick={() => shareToSocial("telegram")}
-									className="w-full text-left px-3 py-2 rounded hover:bg-white/5 text-sm">
-									Telegram
-								</button>
-							</div>
-						</div>
-
-						{/* Invite Dialog - email invites require a Flixz account, guests
-						    can still use Copy Link / Share above */}
-						{!identity?.isGuest && (
-							<Dialog open={inviteDialogOpen} onOpenChange={setInviteDialogOpen}>
-								<DialogTrigger asChild>
-									<button className="btn-primary flex items-center gap-1 md:gap-2 px-2 md:px-3 py-2 text-sm">
-										<Plus className="w-3 h-3 md:w-4 md:h-4" />
-										<span className="hidden sm:inline">Invite</span>
-									</button>
-								</DialogTrigger>
-								<DialogContent className="bg-[#0A0A0A] border-white/10 mx-4 max-w-md">
-									<DialogHeader>
-										<DialogTitle className="text-lg md:text-xl">
-											Invite Friends
-										</DialogTitle>
-									</DialogHeader>
-									<div className="space-y-4 mt-4">
-										<div className="bg-[#7C3AED]/10 border border-[#7C3AED]/20 rounded-lg p-3">
-											<p className="text-xs md:text-sm text-[#A1A1AA]">
-												💡 <span className="text-white">Tip:</span> Anyone with
-												the <span className="text-[#7C3AED]">Copy Link</span> can
-												join instantly, account or not. If your friend has a
-												Flixzbox account, they'll also get a notification below.
-											</p>
-										</div>
-										<Input
-											placeholder="Enter friend's email..."
-											value={inviteEmail}
-											onChange={(e) => setInviteEmail(e.target.value)}
-											onKeyDown={(e) => e.key === "Enter" && sendInvite()}
-											data-testid="invite-email-input"
-											className="bg-black/50 border-white/10 text-sm md:text-base"
-										/>
-										<Button
-											onClick={sendInvite}
-											className="w-full btn-primary text-sm md:text-base">
-											Send Invitation
-										</Button>
-									</div>
-								</DialogContent>
-							</Dialog>
-						)}
-
-						{/* Delete Party Button (Creator Only) */}
-						{isCreator && (
-							<button
-								onClick={deleteParty}
-								data-testid="delete-party-btn"
-								className="btn-secondary flex items-center gap-1 md:gap-2 px-2 md:px-3 py-2 text-sm bg-red-500/10 hover:bg-red-500/20 text-red-500 border-red-500/20"
-								title="End watch party">
-								<X className="w-3 h-3 md:w-4 md:h-4" />
-								<span className="hidden sm:inline">End Party</span>
-							</button>
-						)}
-					</div>
-				</div>
-
-				{/* Video Player Section */}
-				<div ref={videoPlayerRef} className="flex-1 relative bg-black">
-					{/* Active Screen Share View - Takes Priority */}
-					{activeScreenShare && !isSharingScreen && remoteStreams[activeScreenShare.sid] ? (
-						<div className="relative w-full h-full min-h-[250px] md:min-h-[600px] bg-black flex items-center justify-center">
-							{/* Screen Share Banner */}
-							<div className="absolute top-4 left-4 z-20 px-4 py-2 bg-green-500/90 backdrop-blur-sm rounded-full text-white text-sm font-medium flex items-center gap-2">
-								<div className="w-2 h-2 bg-white rounded-full animate-pulse" />
-								{activeScreenShare.name} is sharing their screen
-							</div>
-
-							{/* Main Screen Share Video */}
-							<video
-								autoPlay
-								playsInline
-								muted={false}
-								ref={(el) => {
-									if (el && remoteStreams[activeScreenShare.sid]) {
-										const stream = remoteStreams[activeScreenShare.sid];
-										if (el.srcObject !== stream) {
-											console.log("🖥️ Setting screen share stream to main video element");
-											el.srcObject = stream;
-											el.muted = false; // Ensure audio is enabled
-											el.play().catch((err) => {
-												console.log("Screen share video play error:", err.name);
-											});
-										}
-									}
-								}}
-								className="w-full h-full object-contain"
-								style={{ maxHeight: "100vh" }}
-							/>
-
-							{/* Info overlay */}
-							<div className="absolute bottom-4 left-4 right-4 text-center text-white/80 text-sm">
-								You are viewing {activeScreenShare.name}'s screen • Video and audio are synced in real-time
-							</div>
-						</div>
-					) : isSharingScreen ? (
-						/* When I'm sharing, show the regular video player for me */
-						<div className="relative w-full h-full">
-							{/* My Screen Sharing Banner */}
-							<div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-20 px-4 py-2 bg-green-500/90 backdrop-blur-sm rounded-full text-white text-sm font-medium flex items-center gap-2">
-								<div className="w-2 h-2 bg-white rounded-full animate-pulse" />
-								You are sharing your screen
-							</div>
-
-							{/* Regular video player */}
-							{currentParty?.media_type === "youtube" ? (
-								<div
-									ref={youtubeContainerRef}
-									className="w-full h-full min-h-[250px] md:min-h-[400px] overflow-hidden relative"
-								/>
-							) : showEmbeddedPlayer ? (
-								<iframe
-									src={streamingUrl}
-									className="w-full h-full min-h-[250px] md:min-h-[400px]"
-									allowFullScreen
-									allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-								/>
-							) : trailerKey && selectedSource.id === "trailer" ? (
-								<iframe
-									src={`https://www.youtube.com/embed/${trailerKey}?autoplay=0&controls=1`}
-									className="w-full h-full min-h-[250px] md:min-h-[800px]"
-									allowFullScreen
-									allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-								/>
-							) : (
-								<div className="w-full h-full min-h-[250px] md:min-h-[400px] flex items-center justify-center">
-									{movieDetails?.backdrop_path && (
-										<img
-											src={`${IMAGE_BASE}original${movieDetails.backdrop_path}`}
-											alt={title}
-											className="absolute inset-0 w-full h-full object-cover opacity-30"
-										/>
-									)}
-									<div className="relative text-center p-4 md:p-6">
-										<div className="w-16 h-16 md:w-20 md:h-20 rounded-full bg-[#7C3AED]/20 flex items-center justify-center mb-3 md:mb-4 mx-auto">
-											<Film className="w-8 h-8 md:w-10 md:h-10 text-[#7C3AED]" />
-										</div>
-										<h3 className="text-lg md:text-xl font-bold mb-2">
-											Select a Streaming Source
-										</h3>
-										<p className="text-sm md:text-base text-[#A1A1AA] mb-4 max-w-md mx-auto px-2">
-											Click the source picker above to choose a streaming source, or
-											click "Try Next" to automatically cycle through sources.
-										</p>
-										<button
-											onClick={tryNextSource}
-											className="btn-primary flex items-center gap-2 mx-auto text-sm md:text-base">
-											<RefreshCw className="w-4 h-4 md:w-5 md:h-5" />
-											Try First Source
-										</button>
-									</div>
-								</div>
-							)}
-						</div>
-					) : (
-						/* Normal view - no screen sharing active */
-						<>
-							{/* Embedded Streaming Player (default) */}
-							{currentParty?.media_type === "youtube" ? (
-								<div
-									ref={youtubeContainerRef}
-									className="w-full h-full min-h-[250px] md:min-h-[400px] overflow-hidden relative"
-								/>
-							) : showEmbeddedPlayer ? (
-								<iframe
-									src={streamingUrl}
-									className="w-full h-full min-h-[250px] md:min-h-[400px]"
-									allowFullScreen
-									allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-								/>
-							) : trailerKey && selectedSource.id === "trailer" ? (
-						// YouTube Trailer (fallback)
-						<iframe
-							src={`https://www.youtube.com/embed/${trailerKey}?autoplay=0&controls=1`}
-							className="w-full h-full min-h-[250px] md:min-h-[800px]"
-							allowFullScreen
-							allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-						/>
-					) : (
-								// Backdrop with instructions
-								<div className="w-full h-full min-h-[250px] md:min-h-[400px] flex items-center justify-center">
-									{movieDetails?.backdrop_path && (
-										<img
-											src={`${IMAGE_BASE}original${movieDetails.backdrop_path}`}
-											alt={title}
-											className="absolute inset-0 w-full h-full object-cover opacity-30"
-										/>
-									)}
-									<div className="relative text-center p-4 md:p-6">
-										<div className="w-16 h-16 md:w-20 md:h-20 rounded-full bg-[#7C3AED]/20 flex items-center justify-center mb-3 md:mb-4 mx-auto">
-											<Film className="w-8 h-8 md:w-10 md:h-10 text-[#7C3AED]" />
-										</div>
-										<h3 className="text-lg md:text-xl font-bold mb-2">
-											Select a Streaming Source
-										</h3>
-										<p className="text-sm md:text-base text-[#A1A1AA] mb-4 max-w-md mx-auto px-2">
-											Click the source picker above to choose a streaming source, or
-											click "Try Next" to automatically cycle through sources.
-										</p>
-										<button
-											onClick={tryNextSource}
-											className="btn-primary flex items-center gap-2 mx-auto text-sm md:text-base">
-											<RefreshCw className="w-4 h-4 md:w-5 md:h-5" />
-											Try First Source
-										</button>
-									</div>
-								</div>
-							)}
-						</>
-					)}
-
-					{/* Picture-in-Picture Video Overlay (Your Video) - Hidden during screen share viewing */}
-					{isInCall && !(activeScreenShare && !isSharingScreen) && (
-						<div
-							onPointerDown={pipDrag.onPointerDown}
-							onPointerMove={pipDrag.onPointerMove}
-							onPointerUp={pipDrag.onPointerUp}
-							onPointerCancel={pipDrag.onPointerUp}
-							title="Drag to move"
-							className={`absolute select-none ${
-								isVideoFullscreen
-									? "w-40 h-32 sm:w-48 sm:h-36 md:w-56 md:h-40"
-									: "w-32 h-24 sm:w-40 sm:h-32 md:w-48 md:h-36"
-							} ${
-								pipDrag.offset
-									? ""
-									: isVideoFullscreen
-									? "bottom-6 right-4"
-									: "bottom-24 md:bottom-20 right-3 md:right-4"
-							} rounded-lg overflow-hidden border-2 border-[#7C3AED] shadow-2xl bg-[#121212] cursor-grab active:cursor-grabbing`}
-							style={{
-								zIndex: 2147483647,
-								touchAction: "none",
-								...(pipDrag.offset
-									? { top: pipDrag.offset.y, left: pipDrag.offset.x }
-									: {}),
-							}}>
-							{localStream ? (
-								<>
-									<video
-										ref={localVideoRef}
-										muted
-										playsInline
-										controls={false}
-										draggable={false}
-										className="w-full h-full object-cover bg-black pointer-events-none"
-										style={{ transform: "scaleX(-1)" }}
-										onLoadedMetadata={(e) => {
-											const videoEl = e.target;
-											setTimeout(() => {
-												videoEl.play().catch((err) => {
-													if (err.name !== "AbortError") {
-														console.error("Video play failed:", err.name);
-													}
-												});
-											}, 150);
-										}}
-									/>
-									<div className="absolute bottom-2 left-2 px-2 py-1 bg-black/80 rounded text-xs font-medium">
-										You {!isVideoEnabled && "📵"}
-									</div>
-									{!isVideoEnabled && (
-										<div className="absolute inset-0 bg-[#121212] flex items-center justify-center">
-											<div className="w-12 h-12 rounded-full bg-[#7C3AED] flex items-center justify-center text-xl font-bold">
-												{identity?.name?.charAt(0).toUpperCase()}
-											</div>
-										</div>
-									)}
-								</>
-							) : (
-								<div className="w-full h-full flex items-center justify-center text-xs text-[#A1A1AA]">
-									Loading camera...
-								</div>
-							)}
-						</div>
-					)}
-
-					{/* Remote Participant Videos Overlay - full gallery of everyone in the call, no cap */}
-					{isInCall && filteredRemoteStreams.length > 0 && (
-						<div
-							className={`absolute flex flex-col gap-1 ${
-								galleryDrag.offset
-									? ""
-									: activeScreenShare && !isSharingScreen
-									? "bottom-24 md:bottom-20 left-3 md:left-4" // Move to bottom-left when viewing screen share
-									: isVideoFullscreen
-									? "top-6 right-4"
-									: "top-16 md:top-20 right-3 md:right-4"
-							}`}
-							style={{
-								zIndex: 2147483647,
-								...(galleryDrag.offset
-									? { top: galleryDrag.offset.y, left: galleryDrag.offset.x }
-									: {}),
-							}}>
-							{/* Drag handle - a thin grip bar, separate from the scrollable
-							    tiles below so dragging the gallery doesn't fight with
-							    scrolling through it when there are many participants */}
-							<div
-								onPointerDown={galleryDrag.onPointerDown}
-								onPointerMove={galleryDrag.onPointerMove}
-								onPointerUp={galleryDrag.onPointerUp}
-								onPointerCancel={galleryDrag.onPointerUp}
-								title="Drag to move"
-								className="self-end flex items-center justify-center gap-0.5 px-3 py-1 rounded-full bg-black/70 select-none cursor-grab active:cursor-grabbing"
-								style={{ touchAction: "none" }}>
-								<span className="w-1 h-1 rounded-full bg-white/60" />
-								<span className="w-1 h-1 rounded-full bg-white/60" />
-								<span className="w-1 h-1 rounded-full bg-white/60" />
-							</div>
-							<div
-								className={`flex flex-wrap gap-2 justify-end overflow-y-auto ${
-									activeScreenShare && !isSharingScreen
-										? "max-w-[70vw] max-h-[30vh]"
-										: isVideoFullscreen
-										? "max-w-[50vw] max-h-[70vh]"
-										: "max-w-[60vw] max-h-[60vh]"
-								}`}>
-							{filteredRemoteStreams.map(([peerId, stream]) => (
-								<div
-									key={peerId}
-									className={`${
-										isVideoFullscreen
-											? "w-40 h-32 sm:w-48 sm:h-36 md:w-56 md:h-40"
-											: "w-32 h-24 sm:w-40 sm:h-32 md:w-48 md:h-36"
-									} rounded-lg overflow-hidden border-2 border-white/20 shadow-2xl bg-[#121212]`}>
-									<video
-										autoPlay
-										playsInline
-										muted={false}
-										ref={(el) => {
-											if (el && stream) {
-												// Only set if different to avoid re-renders
-												if (el.srcObject !== stream) {
-													console.log("🎥 Setting remote stream for peer", peerId);
-													el.srcObject = stream;
-
-													// Force play when metadata is loaded
-													el.onloadedmetadata = () => {
-														el.play().catch((err) => {
-															console.error("Remote video play failed:", err.name, "- trying muted");
-															// Fallback: try muted if unmuted fails
-															el.muted = true;
-															el.play().catch((e) => {
-																console.error("Remote video play failed even muted:", e.name);
-															});
-														});
-													};
-												}
-											}
-										}}
-										className="w-full h-full object-cover"
-									/>
-									<div className="absolute top-2 left-2 px-2 py-1 bg-black/80 rounded text-xs font-medium">
-										Participant
-									</div>
-								</div>
-							))}
-							</div>
-						</div>
-					)}
-
-					{/* Fullscreen toggle - rendered after (and at the same max z-index as)
-					    the camera overlays above, so DOM order lets it always win and
-					    stay clickable even if a camera tile is dragged over this corner */}
-					<button
-						onClick={toggleFullscreen}
-						className="absolute top-3 right-3 md:top-4 md:right-4 w-9 h-9 md:w-10 md:h-10 rounded-full bg-black/50 flex items-center justify-center hover:bg-black/70 transition-all"
-						style={{ zIndex: 2147483647 }}
-						title={isVideoFullscreen ? "Exit fullscreen" : "Enter fullscreen"}>
-						{isVideoFullscreen ? (
-							<Minimize2 className="w-4 h-4 md:w-5 md:h-5" />
-						) : (
-							<Maximize2 className="w-4 h-4 md:w-5 md:h-5" />
-						)}
-					</button>
-
-					{/* Current source indicator - positioned to avoid blocking video controls */}
-					{currentParty?.media_type !== "youtube" && (
-						<div
-							className="absolute top-3 left-3 md:top-4 md:left-4 px-2 py-1 md:px-3 md:py-1.5 rounded-full bg-black/70 backdrop-blur-sm text-xs md:text-sm flex items-center gap-1 md:gap-2"
-							style={{ zIndex: 10 }}>
-							<Server className="w-3 h-3 md:w-4 md:h-4 text-[#7C3AED]" />
-							<span className="hidden sm:inline">{selectedSource.name}</span>
-						</div>
-					)}
-				</div>
-
-				{/* Video Call Controls Section */}
-				<div className="border-t border-white/10">
-					{/* Call Controls */}
-					<div className="p-3 md:p-4 flex items-center justify-between gap-2 md:gap-4">
-						<div className="flex items-center gap-1 md:gap-2 text-[#A1A1AA] text-sm md:text-base">
-							<Users className="w-4 h-4 md:w-5 md:h-5" />
-							<span className="hidden sm:inline">
-								{participants.length} watching
-							</span>
-							<span className="sm:hidden">{participants.length}</span>
-						</div>
-
-						<div className="flex items-center gap-2">
-							{isInCall ? (
-								<>
-									<button
-										type="button"
-										onClick={toggleVideo}
-										data-testid="toggle-video-btn"
-										className={`w-11 h-11 md:w-12 md:h-12 rounded-full flex items-center justify-center transition-all ${
-											isVideoEnabled
-												? "bg-white/10 hover:bg-white/20"
-												: "bg-red-500/20 text-red-500"
-										}`}>
-										{isVideoEnabled ? (
-											<Video className="w-4 h-4 md:w-5 md:h-5" />
-										) : (
-											<VideoOff className="w-4 h-4 md:w-5 md:h-5" />
-										)}
-									</button>
-									<button
-										type="button"
-										onClick={toggleAudio}
-										data-testid="toggle-audio-btn"
-										className={`w-11 h-11 md:w-12 md:h-12 rounded-full flex items-center justify-center transition-all ${
-											isAudioEnabled
-												? "bg-white/10 hover:bg-white/20"
-												: "bg-red-500/20 text-red-500"
-										}`}>
-										{isAudioEnabled ? (
-											<Mic className="w-4 h-4 md:w-5 md:h-5" />
-										) : (
-											<MicOff className="w-4 h-4 md:w-5 md:h-5" />
-										)}
-									</button>
-									<button
-										type="button"
-										onClick={isSharingScreen ? stopScreenShare : startScreenShare}
-										data-testid="screen-share-btn"
-										className={`w-11 h-11 md:w-12 md:h-12 rounded-full flex items-center justify-center transition-all ${
-											isSharingScreen
-												? "bg-green-500/20 text-green-400"
-												: "bg-white/10 hover:bg-white/20"
-										}`}
-										title={isSharingScreen ? "Stop sharing screen" : "Share screen"}>
-										{isSharingScreen ? (
-											<MonitorStop className="w-4 h-4 md:w-5 md:h-5" />
-										) : (
-											<MonitorUp className="w-4 h-4 md:w-5 md:h-5" />
-										)}
-									</button>
-									<button
-										type="button"
-										onClick={endCall}
-										data-testid="end-call-btn"
-										className="w-11 h-11 md:w-12 md:h-12 rounded-full bg-red-500 flex items-center justify-center hover:bg-red-600 transition-all">
-										<PhoneOff className="w-4 h-4 md:w-5 md:h-5" />
-									</button>
-								</>
-							) : (
+					</DialogTrigger>
+					<DialogContent className="bg-[#0A0A0A] border-white/10 max-w-lg mx-4">
+						<DialogHeader>
+							<DialogTitle className="text-lg md:text-xl">Change What's Playing</DialogTitle>
+						</DialogHeader>
+						<div className="space-y-4 mt-4">
+							<div className="flex gap-2 p-1 bg-white/5 rounded-lg">
 								<button
 									type="button"
-									onClick={startCall}
-									data-testid="start-call-btn"
-									className="btn-primary flex items-center gap-2 px-3 py-2 md:px-4 md:py-2 text-sm">
-									<Video className="w-4 h-4 md:w-5 md:h-5" />
-									<span className="hidden sm:inline">Join Video Call</span>
-									<span className="sm:hidden">Join</span>
+									onClick={() => setCreateContentTab("browse")}
+									className={`flex-1 py-2 rounded-md text-sm font-medium transition-all ${
+										createContentTab === "browse"
+											? "bg-[#7C3AED] text-white"
+											: "text-[#A1A1AA] hover:text-white"
+									}`}>
+									Movies & TV
 								</button>
-							)}
-						</div>
+								<button
+									type="button"
+									onClick={() => setCreateContentTab("youtube")}
+									className={`flex-1 py-2 rounded-md text-sm font-medium transition-all ${
+										createContentTab === "youtube"
+											? "bg-[#7C3AED] text-white"
+											: "text-[#A1A1AA] hover:text-white"
+									}`}>
+									YouTube
+								</button>
+							</div>
 
-						<div className="hidden sm:flex -space-x-2">
-							{participants.slice(0, 5).map((p, i) => (
-								<div
-									key={i}
-									className="w-8 h-8 rounded-full bg-[#7C3AED] flex items-center justify-center text-sm font-semibold border-2 border-[#050505]">
-									{p.name?.charAt(0).toUpperCase()}
-								</div>
-							))}
-							{participants.length > 5 && (
-								<div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-xs border-2 border-[#050505]">
-									+{participants.length - 5}
-								</div>
-							)}
-						</div>
-					</div>
-				</div>
-			</div>
+							{createContentTab === "youtube" ? (
+								<Input
+									placeholder="Paste a YouTube link or video ID..."
+									value={youtubeUrlInput}
+									onChange={(e) => setYoutubeUrlInput(e.target.value)}
+									onKeyDown={(e) => e.key === "Enter" && submitContentChange()}
+									className="bg-black/50 border-white/10 text-sm md:text-base"
+								/>
+							) : (
+								<>
+									<div className="flex flex-col sm:flex-row gap-2">
+										<Input
+											placeholder="Search for a movie or show..."
+											value={searchQuery}
+											onChange={(e) => setSearchQuery(e.target.value)}
+											onKeyDown={(e) => e.key === "Enter" && searchMovies()}
+											className="bg-black/50 border-white/10 text-sm md:text-base"
+										/>
+										<Button onClick={searchMovies} variant="secondary" className="sm:flex-shrink-0">
+											Search
+										</Button>
+									</div>
 
-			{/* Chat Section - Desktop Sidebar / Mobile Overlay */}
-			<div
-				className={`
-          fixed lg:static inset-0 lg:border-l lg:border-white/10 flex flex-col
-          bg-[#050505] lg:bg-transparent z-[60] transition-transform duration-300
-          ${isChatOpen ? "translate-x-0" : "translate-x-full lg:translate-x-0"}
-          lg:w-[380px]
-        `}>
-				{/* Chat Header */}
-				<div className="p-4 border-b border-white/10 flex items-center justify-between">
-					<h3 className="font-semibold">Chat</h3>
+									{searchResults.length > 0 && (
+										<div className="max-h-60 overflow-y-auto space-y-2">
+											{searchResults.slice(0, 5).map((item) => (
+												<div
+													key={item.id}
+													onClick={() => setSelectedMovie(item)}
+													className={`flex items-center gap-2 md:gap-3 p-2 rounded-lg cursor-pointer transition-all ${
+														selectedMovie?.id === item.id
+															? "bg-[#7C3AED]/20 border border-[#7C3AED]"
+															: "bg-white/5 hover:bg-white/10"
+													}`}>
+													{item.poster_path && (
+														<img
+															src={`${IMAGE_BASE}w92${item.poster_path}`}
+															alt={item.title || item.name}
+															className="w-10 h-14 md:w-12 md:h-16 object-cover rounded flex-shrink-0"
+														/>
+													)}
+													<div className="flex-1 min-w-0">
+														<p className="font-medium text-sm md:text-base truncate">
+															{item.title || item.name}
+														</p>
+														<p className="text-xs md:text-sm text-[#A1A1AA]">
+															{(item.release_date || item.first_air_date)?.split("-")[0]}{" "}
+															• {item.media_type === "tv" ? "TV Show" : "Movie"}
+														</p>
+													</div>
+												</div>
+											))}
+										</div>
+									)}
+								</>
+							)}
+
+							<Button onClick={submitContentChange} className="w-full btn-primary">
+								Switch
+							</Button>
+						</div>
+					</DialogContent>
+				</Dialog>
+			)}
+
+			<button
+				onClick={copyRoomLink}
+				data-testid="copy-link-btn"
+				className="btn-secondary flex items-center gap-1 md:gap-2 px-2 md:px-3 py-2 text-sm">
+				<Link2 className="w-4 h-4" />
+				<span className="hidden lg:inline">Copy Link</span>
+			</button>
+
+			<div className="relative group hidden sm:block">
+				<button className="btn-secondary flex items-center gap-1 md:gap-2 px-2 md:px-3 py-2 text-sm">
+					<Share2 className="w-4 h-4" />
+					<span className="hidden lg:inline">Share</span>
+				</button>
+				<div className="absolute right-0 top-full mt-2 bg-[#0A0A0A] border border-white/10 rounded-lg p-2 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 min-w-[150px]">
 					<button
-						onClick={() => setIsChatOpen(false)}
-						className="lg:hidden w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 transition-all flex items-center justify-center">
-						<X className="w-4 h-4" />
+						onClick={() => shareToSocial("whatsapp")}
+						className="w-full text-left px-3 py-2 rounded hover:bg-white/5 text-sm">
+						WhatsApp
+					</button>
+					<button
+						onClick={() => shareToSocial("twitter")}
+						className="w-full text-left px-3 py-2 rounded hover:bg-white/5 text-sm">
+						Twitter
+					</button>
+					<button
+						onClick={() => shareToSocial("telegram")}
+						className="w-full text-left px-3 py-2 rounded hover:bg-white/5 text-sm">
+						Telegram
 					</button>
 				</div>
-
-				{/* Messages */}
-				<div ref={chatRef} className="flex-1 overflow-y-auto p-4 space-y-4">
-					{messages.length === 0 ? (
-						<div className="text-center text-[#A1A1AA] py-8">
-							<p>No messages yet</p>
-							<p className="text-sm">Start the conversation!</p>
-						</div>
-					) : (
-						messages.map((msg, i) => (
-							<div key={i} className="chat-message">
-								<div className="flex items-start gap-2">
-									<div className="w-8 h-8 rounded-full bg-[#7C3AED] flex items-center justify-center text-sm font-semibold flex-shrink-0">
-										{msg.user_name?.charAt(0).toUpperCase()}
-									</div>
-									<div className="flex-1 min-w-0">
-										<div className="flex items-center gap-2">
-											<span className="font-medium text-sm truncate">
-												{msg.user_name}
-											</span>
-											<span className="text-xs text-[#52525B] flex-shrink-0">
-												{new Date(msg.timestamp).toLocaleTimeString([], {
-													hour: "2-digit",
-													minute: "2-digit",
-												})}
-											</span>
-										</div>
-										<p className="text-sm text-[#A1A1AA] mt-1 break-words">
-											{msg.message}
-										</p>
-									</div>
-								</div>
-							</div>
-						))
-					)}
-				</div>
-
-				{/* Message Input */}
-				<form
-					onSubmit={sendMessage}
-					className="p-4 border-t border-white/10 flex gap-2">
-					<Input
-						value={newMessage}
-						onChange={(e) => setNewMessage(e.target.value)}
-						placeholder="Type a message..."
-						data-testid="chat-input"
-						className="bg-black/50 border-white/10"
-					/>
-					<Button
-						type="submit"
-						data-testid="send-message-btn"
-						className="bg-[#7C3AED] hover:bg-[#8B5CF6] flex-shrink-0">
-						<Send className="w-4 h-4" />
-					</Button>
-				</form>
 			</div>
 
-			{/* Mobile Chat Overlay Backdrop */}
-			{isChatOpen && (
-				<div
-					className="fixed inset-0 bg-black/50 z-[59] lg:hidden"
-					onClick={() => setIsChatOpen(false)}
-				/>
+			{!identity?.isGuest && (
+				<Dialog open={inviteDialogOpen} onOpenChange={setInviteDialogOpen}>
+					<DialogTrigger asChild>
+						<button className="btn-primary flex items-center gap-1 md:gap-2 px-2 md:px-3 py-2 text-sm">
+							<Plus className="w-3 h-3 md:w-4 md:h-4" />
+							<span className="hidden sm:inline">Invite</span>
+						</button>
+					</DialogTrigger>
+					<DialogContent className="bg-[#0A0A0A] border-white/10 mx-4 max-w-md">
+						<DialogHeader>
+							<DialogTitle className="text-lg md:text-xl">Invite Friends</DialogTitle>
+						</DialogHeader>
+						<div className="space-y-4 mt-4">
+							<div className="bg-[#7C3AED]/10 border border-[#7C3AED]/20 rounded-lg p-3">
+								<p className="text-xs md:text-sm text-[#A1A1AA]">
+									💡 <span className="text-white">Tip:</span> Anyone with the{" "}
+									<span className="text-[#7C3AED]">Copy Link</span> can join instantly, account or
+									not. If your friend has a Flixzbox account, they'll also get a notification
+									below.
+								</p>
+							</div>
+							<Input
+								placeholder="Enter friend's email..."
+								value={inviteEmail}
+								onChange={(e) => setInviteEmail(e.target.value)}
+								onKeyDown={(e) => e.key === "Enter" && sendInvite()}
+								data-testid="invite-email-input"
+								className="bg-black/50 border-white/10 text-sm md:text-base"
+							/>
+							<Button onClick={sendInvite} className="w-full btn-primary text-sm md:text-base">
+								Send Invitation
+							</Button>
+						</div>
+					</DialogContent>
+				</Dialog>
 			)}
-		</div>
+
+			{isCreator && (
+				<button
+					onClick={deleteParty}
+					data-testid="delete-party-btn"
+					className="btn-secondary flex items-center gap-1 md:gap-2 px-2 md:px-3 py-2 text-sm bg-red-500/10 hover:bg-red-500/20 text-red-500 border-red-500/20"
+					title="End watch party">
+					<X className="w-3 h-3 md:w-4 md:h-4" />
+					<span className="hidden sm:inline">End Party</span>
+				</button>
+			)}
+		</>
+	);
+
+	return (
+		<WatchPartyRoom
+			partyName={currentParty?.name}
+			onBack={() => navigate("/watch-party")}
+			headerActions={headerActions}
+			isCreator={isCreator}
+			mediaType={currentParty?.media_type}
+			title={title}
+			backdropPath={
+				movieDetails?.backdrop_path ? `${IMAGE_BASE}original${movieDetails.backdrop_path}` : null
+			}
+			isPlaying={isPlaying}
+			currentTime={currentTime}
+			isBuffering={isBuffering}
+			onTogglePlayback={togglePlayback}
+			youtubeContainerRef={youtubeContainerRef}
+			youtubePlayerRef={youtubePlayerRef}
+			onYoutubeSeek={handleYoutubeSeek}
+			showEmbeddedPlayer={showEmbeddedPlayer}
+			streamingUrl={streamingUrl}
+			selectedSource={selectedSource}
+			showSourcePicker={showSourcePicker}
+			setShowSourcePicker={setShowSourcePicker}
+			streamingSources={STREAMING_SOURCES}
+			changeSource={changeSource}
+			tryNextSource={tryNextSource}
+			trailerKey={trailerKey}
+			activeScreenShare={activeScreenShare}
+			isSharingScreen={isSharingScreen}
+			remoteScreenShareStream={remoteScreenShareStream}
+			isInCall={isInCall}
+			onStartCall={startCall}
+			onEndCall={endCall}
+			localStream={localStream}
+			localVideoRef={localVideoRef}
+			isVideoEnabled={isVideoEnabled}
+			onToggleVideo={toggleVideo}
+			isAudioEnabled={isAudioEnabled}
+			onToggleAudio={toggleAudio}
+			onStartScreenShare={startScreenShare}
+			onStopScreenShare={stopScreenShare}
+			remoteStreamEntries={filteredRemoteStreams}
+			peerNames={peerNames}
+			peerMediaState={peerMediaState}
+			identity={identity}
+			participantCount={participants.length}
+			isChatOpen={isChatOpen}
+			setIsChatOpen={setIsChatOpen}
+			messages={messages}
+			chatRef={chatRef}
+			newMessage={newMessage}
+			setNewMessage={setNewMessage}
+			onSendMessage={sendMessage}
+		/>
 	);
 };
 
