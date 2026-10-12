@@ -18,6 +18,7 @@ import bcrypt
 import jwt
 import socketio
 import shutil
+import http.cookies
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -97,9 +98,10 @@ class TokenResponse(BaseModel):
 
 class WatchPartyCreate(BaseModel):
     name: str
-    media_type: str = "movie"
+    media_type: str = "movie"  # "movie" | "tv" | "youtube" | "custom"
     movie_id: Optional[int] = None
     youtube_video_id: Optional[str] = None
+    custom_content_id: Optional[str] = None
 
 class GuestJoinRequest(BaseModel):
     name: str
@@ -110,6 +112,7 @@ class WatchPartyResponse(BaseModel):
     name: str
     movie_id: Optional[int] = None
     youtube_video_id: Optional[str] = None
+    custom_content_id: Optional[str] = None
     media_type: str
     host_id: str
     host_name: str
@@ -238,6 +241,41 @@ async def get_current_user(request: Request) -> dict:
                 return user
         
         raise HTTPException(status_code=401, detail="Invalid token")
+
+async def resolve_verified_user_id(token: Optional[str]) -> Optional[str]:
+    """Server-verified user_id from a JWT or OAuth session token, or None.
+
+    Mirrors get_current_user's lookup logic but never raises - used at
+    socket connect time so host-command validation can bind each sid to an
+    identity the server itself verified, never to a bare user_id field a
+    join_room payload merely claims (host_id is public - it's returned by
+    GET /watch-party/{room_id} and sent to every joiner - so trusting a
+    client-supplied user_id there would let anyone claim to be the host).
+    """
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        user_id = payload.get("user_id")
+        user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+        if user:
+            return user_id
+        session = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
+        return session.get("user_id") if session else None
+    except jwt.ExpiredSignatureError:
+        return None
+    except jwt.InvalidTokenError:
+        session = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
+        if not session:
+            return None
+        expires_at = session.get("expires_at")
+        if isinstance(expires_at, str):
+            expires_at = datetime.fromisoformat(expires_at)
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at < datetime.now(timezone.utc):
+            return None
+        return session.get("user_id")
 
 import asyncio
 
@@ -573,22 +611,35 @@ async def update_continue_watching(item: ContinueWatchingItem, user: dict = Depe
 
 @api_router.post("/watch-party", response_model=WatchPartyResponse)
 async def create_watch_party(data: WatchPartyCreate, user: dict = Depends(get_current_user)):
-    if data.media_type not in ("movie", "tv", "youtube"):
+    if data.media_type not in ("movie", "tv", "youtube", "custom"):
         raise HTTPException(status_code=400, detail="Invalid media_type")
 
     if data.media_type == "youtube":
         if not data.youtube_video_id:
             raise HTTPException(status_code=400, detail="youtube_video_id is required for youtube parties")
+    elif data.media_type == "custom":
+        if not data.custom_content_id:
+            raise HTTPException(status_code=400, detail="custom_content_id is required for custom parties")
+        content = await db.custom_content.find_one({"content_id": data.custom_content_id})
+        if not content:
+            raise HTTPException(status_code=404, detail="Custom content not found")
     elif not data.movie_id:
         raise HTTPException(status_code=400, detail="movie_id is required")
 
     room_id = f"room_{uuid.uuid4().hex[:8]}"
+    # hard_sync parties (youtube/custom) have a real player API to drive, so
+    # they go through the countdown + true play/pause/seek engine. "movie"/
+    # "tv" (vidsrc-style embeds) have no control API for a cross-origin
+    # iframe we don't own - that's a platform wall, not a code gap - so they
+    # stay best-effort/advisory, same honest behavior as before this change.
+    is_hard_sync = data.media_type in ("youtube", "custom")
 
     party = {
         "room_id": room_id,
         "name": data.name,
         "movie_id": data.movie_id,
         "youtube_video_id": data.youtube_video_id,
+        "custom_content_id": data.custom_content_id,
         "media_type": data.media_type,
         "host_id": user["user_id"],
         "host_name": user["name"],
@@ -596,7 +647,8 @@ async def create_watch_party(data: WatchPartyCreate, user: dict = Depends(get_cu
         "is_playing": False,
         "current_time": 0.0,
         "playback_updated_at": time.time(),
-        "current_source": "vidsrcxyz" if data.media_type != "youtube" else None,  # Default to first source
+        "countdown_start_at": None,
+        "current_source": "vidsrcxyz" if data.media_type in ("movie", "tv") else None,
         "participants": [{"user_id": user["user_id"], "name": user["name"], "is_guest": False}]
     }
 
@@ -682,32 +734,121 @@ async def list_watch_parties(user: dict = Depends(get_current_user)):
 
 # ==================== SOCKET.IO EVENTS ====================
 
-# Store active connections per room
-room_connections: Dict[str, Dict[str, str]] = {}
+# Store active connections per room: room_id -> {sid: {"user_name", "user_id"}}
+# user_id is bound here, at join time, from the same identity the client
+# already authenticated with via the REST join/guest-join call - host
+# commands below check THIS recorded value, never a client-supplied field
+# in the command payload itself, so a forged event can't claim to be the
+# host just by naming them.
+room_connections: Dict[str, Dict[str, dict]] = {}
+# Per-room set of sids that have reported ready for the CURRENT media.
+# Ephemeral/in-memory only (unlike playback position) - resets on every
+# media change and a server restart losing it is harmless.
+room_ready: Dict[str, set] = {}
+# sid -> server-verified user_id (JWT or OAuth session, resolved once at
+# connect time via resolve_verified_user_id). join_room uses this - when
+# present - instead of trusting the user_id field a client's own join_room
+# payload claims, since that field alone is forgeable and host_id is public.
+sid_verified_user_id: Dict[str, str] = {}
+
+
+def _is_host(room_id: str, sid: str, party: dict) -> bool:
+    # Deliberately checks sid_verified_user_id directly, NOT
+    # room_connections[...]["user_id"] - the latter falls back to whatever a
+    # join_room payload claims when there's no verified identity (true for
+    # any guest), and host_id is public, so a connection with no verified
+    # identity must never be able to pass this check no matter what user_id
+    # it claims. Only a cryptographically-verified JWT/session match counts.
+    if not party:
+        return False
+    verified_user_id = sid_verified_user_id.get(sid)
+    return bool(verified_user_id) and verified_user_id == party.get("host_id")
+
+
+async def _sync_state_payload(party: dict, extra: dict = None) -> dict:
+    payload = {
+        'is_playing': party.get('is_playing', False),
+        'current_time': party.get('current_time', 0.0),
+        'server_now': time.time(),
+        'media_type': party.get('media_type'),
+        'source': party.get('current_source'),
+    }
+    if extra:
+        payload.update(extra)
+    return payload
+
+
+async def _handle_host_command(sid, data, update_fields: dict, rejection_reason: str):
+    """Shared validate -> persist -> broadcast for host_play/pause/seek/restart."""
+    room_id = data.get('room_id')
+    party = await db.watch_parties.find_one({"room_id": room_id})
+    if not party:
+        return
+
+    if not _is_host(room_id, sid, party):
+        await sio.emit('host_command_rejected', {'reason': rejection_reason}, to=sid)
+        logger.warning(f"Rejected host command from non-host sid={sid} in room {room_id}")
+        return
+
+    update_fields = {**update_fields, "playback_updated_at": time.time()}
+    await db.watch_parties.update_one({"room_id": room_id}, {"$set": update_fields})
+    party.update(update_fields)
+
+    user_name = room_connections.get(room_id, {}).get(sid, {}).get("user_name", party.get("host_name"))
+    await sio.emit('sync_state', await _sync_state_payload(party, {'user_name': user_name}), room=room_id)
+
 
 @sio.event
-async def connect(sid, environ):
+async def connect(sid, environ, auth=None):
     logger.info(f"Client connected: {sid}")
+    # Resolve the connecting client's REAL identity server-side, from a JWT
+    # (passed via socket.io-client's `auth` option) or an OAuth session
+    # cookie carried automatically on the handshake - never from a payload
+    # field the client fills in itself. Guests have no token and resolve to
+    # None here, which is fine - only an authenticated account can ever be a
+    # room's host_id, so a guest never needs to pass the host check.
+    token = (auth or {}).get("token") if isinstance(auth, dict) else None
+    if not token:
+        cookie_header = environ.get("HTTP_COOKIE", "")
+        if cookie_header:
+            jar = http.cookies.SimpleCookie()
+            try:
+                jar.load(cookie_header)
+                if "session_token" in jar:
+                    token = jar["session_token"].value
+            except Exception:
+                pass
+    verified_user_id = await resolve_verified_user_id(token)
+    if verified_user_id:
+        sid_verified_user_id[sid] = verified_user_id
 
 @sio.event
 async def disconnect(sid):
     logger.info(f"Client disconnected: {sid}")
+    sid_verified_user_id.pop(sid, None)
     # Remove from all rooms
     for room_id, connections in list(room_connections.items()):
         if sid in connections:
-            user_name = connections.pop(sid)
+            user_name = connections.pop(sid).get("user_name", "Someone")
             await sio.emit('user_left', {'user_name': user_name}, room=room_id)
+        if room_id in room_ready:
+            room_ready[room_id].discard(sid)
 
 @sio.event
 async def join_room(sid, data):
     room_id = data.get('room_id')
     user_name = data.get('user_name', 'Anonymous')
+    # The server-verified identity from connect() always wins over whatever
+    # user_id the join_room payload itself claims - that field is only
+    # trusted as a fallback for guests, who resolve to no verified identity
+    # and can never be host_id anyway.
+    user_id = sid_verified_user_id.get(sid) or data.get('user_id')
 
     await sio.enter_room(sid, room_id)
 
     if room_id not in room_connections:
         room_connections[room_id] = {}
-    room_connections[room_id][sid] = user_name
+    room_connections[room_id][sid] = {"user_name": user_name, "user_id": user_id}
 
     # Get current party state from database
     party = await db.watch_parties.find_one({"room_id": room_id})
@@ -720,20 +861,36 @@ async def join_room(sid, data):
         is_playing = party.get('is_playing', False)
         current_time = party.get('current_time', 0.0)
         updated_at = party.get('playback_updated_at')
+        countdown_start_at = party.get('countdown_start_at')
 
         # If playback was left running, account for time elapsed since that
         # position was last recorded so a late joiner doesn't start behind.
+        # This also naturally clamps a mid-countdown joiner's time to 0
+        # (updated_at is in the future, so time.time() - updated_at is
+        # negative and max()'d to 0) - they still need the explicit
+        # countdown_start_at flag below to know to render the countdown
+        # instead of a plain paused player, though.
         if is_playing and updated_at:
             current_time += max(0.0, time.time() - updated_at)
 
-        await sio.emit('initial_sync', {
+        now = time.time()
+        await sio.emit('sync_state', {
             'is_playing': is_playing,
             'current_time': current_time,
+            'server_now': now,
             'source': party.get('current_source'),
             'media_type': party.get('media_type'),
             'movie_id': party.get('movie_id'),
-            'youtube_video_id': party.get('youtube_video_id')
+            'youtube_video_id': party.get('youtube_video_id'),
+            'custom_content_id': party.get('custom_content_id'),
+            'countdown_start_at': countdown_start_at if countdown_start_at and countdown_start_at > now else None,
+            'host_id': party.get('host_id'),
+            'host_name': party.get('host_name'),
         }, to=sid)
+
+        ready_count = len(room_ready.get(room_id, set()))
+        total_count = len(room_connections.get(room_id, {}))
+        await sio.emit('participant_ready', {'ready_count': ready_count, 'total_count': total_count}, to=sid)
 
     await sio.emit('user_joined', {'user_name': user_name}, room=room_id)
     logger.info(f"{user_name} joined room {room_id}")
@@ -741,96 +898,115 @@ async def join_room(sid, data):
 @sio.event
 async def leave_room(sid, data):
     room_id = data.get('room_id')
-    
+
     if room_id in room_connections and sid in room_connections[room_id]:
-        user_name = room_connections[room_id].pop(sid)
+        user_name = room_connections[room_id].pop(sid).get("user_name", "Someone")
         await sio.emit('user_left', {'user_name': user_name}, room=room_id)
-    
+    if room_id in room_ready:
+        room_ready[room_id].discard(sid)
+
     await sio.leave_room(sid, room_id)
 
 @sio.event
-async def sync_playback(sid, data):
-    room_id = data.get('room_id')
-    is_playing = data.get('is_playing')
-    current_time = data.get('current_time')
-    source = data.get('source')
-    user_name = data.get('user_name')
-
-    # Update database
-    update_data = {
-        "is_playing": is_playing,
-        "current_time": current_time,
-        "playback_updated_at": time.time(),
-    }
-    if source:
-        update_data["current_source"] = source
-
-    await db.watch_parties.update_one(
-        {"room_id": room_id},
-        {"$set": update_data}
-    )
-
-    # Broadcast to room
-    broadcast_data = {
-        'is_playing': is_playing,
-        'current_time': current_time,
-        'user_name': user_name
-    }
-    if source:
-        broadcast_data['source'] = source
-
-    await sio.emit('playback_sync', broadcast_data, room=room_id, skip_sid=sid)
+async def host_play(sid, data):
+    fields = {"is_playing": True}
+    if data.get('current_time') is not None:
+        fields["current_time"] = data.get('current_time')
+    await _handle_host_command(sid, data, fields, "Only the host can resume playback")
 
 @sio.event
-async def content_change(sid, data):
-    """Host swaps what a party is watching (movie/TV <-> YouTube) mid-session"""
-    room_id = data.get('room_id')
-    media_type = data.get('media_type')
-    movie_id = data.get('movie_id')
-    youtube_video_id = data.get('youtube_video_id')
-    user_name = data.get('user_name')
+async def host_pause(sid, data):
+    fields = {"is_playing": False}
+    if data.get('current_time') is not None:
+        fields["current_time"] = data.get('current_time')
+    await _handle_host_command(sid, data, fields, "Only the host can pause playback")
 
+@sio.event
+async def host_seek(sid, data):
+    fields = {"current_time": data.get('current_time', 0.0)}
+    await _handle_host_command(sid, data, fields, "Only the host can seek")
+
+@sio.event
+async def host_restart(sid, data):
+    fields = {"current_time": 0.0, "is_playing": True}
+    await _handle_host_command(sid, data, fields, "Only the host can restart playback")
+
+@sio.event
+async def host_change_media(sid, data):
+    """Host swaps what a party is watching (movie/TV/YouTube/custom upload) mid-session."""
+    room_id = data.get('room_id')
+    party = await db.watch_parties.find_one({"room_id": room_id})
+    if not party:
+        return
+    if not _is_host(room_id, sid, party):
+        await sio.emit('host_command_rejected', {'reason': 'Only the host can change media'}, to=sid)
+        logger.warning(f"Rejected media change from non-host sid={sid} in room {room_id}")
+        return
+
+    media_type = data.get('media_type')
     update_data = {
         "media_type": media_type,
-        "movie_id": movie_id,
-        "youtube_video_id": youtube_video_id,
+        "movie_id": data.get('movie_id'),
+        "youtube_video_id": data.get('youtube_video_id'),
+        "custom_content_id": data.get('custom_content_id'),
         "is_playing": False,
         "current_time": 0.0,
         "playback_updated_at": time.time(),
+        "countdown_start_at": None,
     }
     await db.watch_parties.update_one({"room_id": room_id}, {"$set": update_data})
+    room_ready[room_id] = set()  # fresh media needs a fresh ready-check
 
-    await sio.emit('content_changed', {
+    user_name = room_connections.get(room_id, {}).get(sid, {}).get("user_name", party.get("host_name"))
+    await sio.emit('media_changed', {
         'media_type': media_type,
-        'movie_id': movie_id,
-        'youtube_video_id': youtube_video_id,
-        'user_name': user_name
+        'movie_id': update_data['movie_id'],
+        'youtube_video_id': update_data['youtube_video_id'],
+        'custom_content_id': update_data['custom_content_id'],
+        'user_name': user_name,
     }, room=room_id)
 
 @sio.event
-async def position_update(sid, data):
-    """Handle continuous position updates from host"""
+async def player_ready(sid, data):
+    """Any participant reports their player has loaded the current media and
+    can start - informational for the host's UI (shows ready_count/total),
+    not a hard gate: the host can still start early so one stuck connection
+    can't deadlock the room."""
     room_id = data.get('room_id')
-    current_time = data.get('current_time')
-    is_playing = data.get('is_playing')
-    user_name = data.get('user_name')
+    if room_id not in room_ready:
+        room_ready[room_id] = set()
+    room_ready[room_id].add(sid)
 
-    # Update database with latest position (lightweight update)
-    await db.watch_parties.update_one(
-        {"room_id": room_id},
-        {"$set": {
-            "current_time": current_time,
-            "is_playing": is_playing,
-            "playback_updated_at": time.time(),
-        }}
-    )
+    await sio.emit('participant_ready', {
+        'ready_count': len(room_ready[room_id]),
+        'total_count': len(room_connections.get(room_id, {})),
+    }, room=room_id)
 
-    # Broadcast position to all participants except sender
-    await sio.emit('position_update', {
-        'current_time': current_time,
-        'is_playing': is_playing,
-        'user_name': user_name
-    }, room=room_id, skip_sid=sid)
+@sio.event
+async def start_watch_party(sid, data):
+    """Host-only: schedules a clock-synchronized countdown start 4s out so
+    every client - regardless of individual latency - begins playback at
+    the same moment, computed from this shared timestamp rather than each
+    client's own local 3-2-1 timer."""
+    room_id = data.get('room_id')
+    party = await db.watch_parties.find_one({"room_id": room_id})
+    if not party:
+        return
+    if not _is_host(room_id, sid, party):
+        await sio.emit('host_command_rejected', {'reason': 'Only the host can start the watch party'}, to=sid)
+        logger.warning(f"Rejected start_watch_party from non-host sid={sid} in room {room_id}")
+        return
+
+    start_at = time.time() + 4.0
+    await db.watch_parties.update_one({"room_id": room_id}, {"$set": {
+        "is_playing": True,
+        "current_time": 0.0,
+        "playback_updated_at": start_at,
+        "countdown_start_at": start_at,
+    }})
+
+    await sio.emit('countdown_started', {'start_at': start_at, 'server_now': time.time()}, room=room_id)
+    logger.info(f"Watch party countdown started in room {room_id}, start_at={start_at}")
 
 @sio.event
 async def chat_message(sid, data):

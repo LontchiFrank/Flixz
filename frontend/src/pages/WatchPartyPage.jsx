@@ -26,6 +26,11 @@ import {
 	DialogTrigger,
 } from "../components/ui/dialog";
 import WatchPartyRoom from "../components/watch-party/WatchPartyRoom";
+import WatchPartyCountdownOverlay from "../components/watch-party/WatchPartyCountdownOverlay";
+import { useWatchPartySync } from "../lib/watchParty/useWatchPartySync";
+import { TmdbWatchPartyPlayer } from "../lib/watchParty/TmdbWatchPartyPlayer";
+import { CustomWatchPartyPlayer } from "../lib/watchParty/CustomWatchPartyPlayer";
+import { YouTubeWatchPartyPlayer } from "../lib/watchParty/YouTubeWatchPartyPlayer";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const IMAGE_BASE = "https://image.tmdb.org/t/p/";
@@ -119,7 +124,7 @@ const loadYoutubeIframeApi = () => {
 const WatchPartyPage = () => {
 	const { roomId } = useParams();
 	const navigate = useNavigate();
-	const { user, getAuthHeaders } = useAuth();
+	const { user, token, getAuthHeaders } = useAuth();
 
 	// Guest join state (for visitors without a Flixz account)
 	const [guestSession, setGuestSession] = useState(() => {
@@ -146,12 +151,24 @@ const WatchPartyPage = () => {
 	const [parties, setParties] = useState([]);
 	const [currentParty, setCurrentParty] = useState(null);
 	const [movieDetails, setMovieDetails] = useState(null);
+	// Self-hosted upload details (custom_content doc), mirrors movieDetails
+	// for the TMDB case - fetched once we know currentParty.custom_content_id.
+	const [customContentDetails, setCustomContentDetails] = useState(null);
 	const [messages, setMessages] = useState([]);
 	const [newMessage, setNewMessage] = useState("");
-	const [isPlaying, setIsPlaying] = useState(false);
-	const [currentTime, setCurrentTime] = useState(0);
 	const [participants, setParticipants] = useState([]);
 	const [loading, setLoading] = useState(true);
+
+	// isHost has to be computed this early (not just before the final return,
+	// where the old isCreator lived) because useWatchPartySync below is a
+	// hook - it must be called unconditionally on every render, in the same
+	// position, so it can't wait for a later conditional-return guard. It's
+	// safe to compute before currentParty/identity are loaded: both sides
+	// are optional-chained, so it's simply false until they resolve.
+	const isHost =
+		!!identity &&
+		!identity.isGuest &&
+		(currentParty?.host_id === identity.id || currentParty?.host_name === identity.name);
 
 	// Create party state
 	const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -159,9 +176,16 @@ const WatchPartyPage = () => {
 	const [searchResults, setSearchResults] = useState([]);
 	const [selectedMovie, setSelectedMovie] = useState(null);
 	const [partyName, setPartyName] = useState("");
-	const [createContentTab, setCreateContentTab] = useState("browse"); // "browse" | "youtube"
+	const [createContentTab, setCreateContentTab] = useState("browse"); // "browse" | "youtube" | "custom"
 	const [youtubeUrlInput, setYoutubeUrlInput] = useState("");
 	const [changeContentDialogOpen, setChangeContentDialogOpen] = useState(false);
+	const [customContentList, setCustomContentList] = useState([]);
+	const [selectedCustomContent, setSelectedCustomContent] = useState(null);
+	// Whether the CURRENT media has ever actually started playing - false
+	// right after creation or any host_change_media, driving whether the
+	// waiting/countdown overlay shows. Only meaningful for hard-sync media
+	// (youtube/custom); TMDB parties never show that overlay at all.
+	const [hasEverPlayed, setHasEverPlayed] = useState(false);
 
 	// Video call state
 	const [isInCall, setIsInCall] = useState(false);
@@ -196,6 +220,14 @@ const WatchPartyPage = () => {
 	// Mobile chat toggle
 	const [isChatOpen, setIsChatOpen] = useState(false);
 
+	// Reactive mirror of socketRef - the latter stays a plain ref (stable
+	// access from the many existing WebRTC/chat callbacks, unchanged), but
+	// useWatchPartySync needs an actual state value so its effect re-runs
+	// once the socket genuinely exists (assigning to a ref's .current
+	// doesn't trigger a re-render by itself).
+	const [socket, setSocket] = useState(null);
+	const watchParty = useWatchPartySync({ socket, roomId, isHost });
+
 	// Refs
 	const socketRef = useRef(null);
 	const chatRef = useRef(null);
@@ -205,32 +237,25 @@ const WatchPartyPage = () => {
 	// WatchPartyRoom, which owns a container wrapping cameras+controls+chat too.
 	const localStreamRef = useRef(null); // Keep stream in ref for stable access
 	const pendingCandidatesRef = useRef({}); // Store ICE candidates before connection ready
-	const playbackStartTimeRef = useRef(null); // Track when playback started
-	const lastSyncTimeRef = useRef(0); // Track last manual sync to avoid duplicate broadcasts
-	const isSyncingRef = useRef(false); // Prevent sync loops
 	const youtubePlayerRef = useRef(null); // YT.Player instance for youtube-content parties
 	const youtubeContainerRef = useRef(null);
+	const customVideoRef = useRef(null); // <video> element for self-hosted uploads
+	const tmdbAdapterRef = useRef(null); // TmdbWatchPartyPlayer instance for movie/TV parties
 
 	// Floating-layout camera dragging is now owned per-tile inside
 	// FloatingParticipantLayer (see components/watch-party/), each with its
 	// own useDraggableOverlay instance - no drag state lives here anymore.
-	// Always-current mirror of isPlaying/currentTime. The YouTube player is
-	// created asynchronously (loading the IFrame API, then constructing
-	// YT.Player), so a sync (initial_sync on join, playback_sync, etc.) can
-	// arrive and update React state before the player exists. onReady must
-	// read this ref rather than close over isPlaying/currentTime directly -
-	// a closure captured when the player-creation effect ran would still be
-	// holding whatever those values were at that moment, not the latest sync.
-	const latestPlaybackRef = useRef({ isPlaying: false, currentTime: 0 });
+	// playbackStartTimeRef/lastSyncTimeRef/isSyncingRef/latestPlaybackRef are
+	// gone too - WatchPartySyncEngine (lib/watchParty/) now owns all of
+	// that: the stale-closure race they guarded against is instead solved
+	// by only ever handing the engine an adapter once it reports ready (see
+	// WatchPartySyncEngine.setAdapter), and the sync-echo-loop guard is the
+	// engine's own internal _applying flag.
 
 	// Keep localStreamRef in sync with localStream state
 	useEffect(() => {
 		localStreamRef.current = localStream;
 	}, [localStream]);
-
-	useEffect(() => {
-		latestPlaybackRef.current = { isPlaying, currentTime };
-	}, [isPlaying, currentTime]);
 
 	// WebRTC Functions - Fixed for two-way video
 	const createPeerConnection = useCallback(
@@ -510,8 +535,12 @@ const WatchPartyPage = () => {
 
 			setCurrentParty(res.data);
 			setParticipants(res.data.participants || []);
-			setIsPlaying(res.data.is_playing);
-			setCurrentTime(res.data.current_time);
+			// Actual isPlaying/currentTime come from the sync_state the server
+			// sends as a targeted message once join_room completes (handled by
+			// useWatchPartySync) - that path also does the elapsed-time
+			// compensation this REST snapshot doesn't. Just seed whether
+			// playback has ever started, for the countdown/waiting overlay.
+			setHasEverPlayed(res.data.is_playing || res.data.current_time > 0.5);
 
 			// Set current source if available
 			if (res.data.current_source) {
@@ -528,10 +557,8 @@ const WatchPartyPage = () => {
 				}
 			}
 
-			// Fetch movie details (skip for youtube parties - no TMDB record)
-			if (res.data.media_type === "youtube") {
-				setMovieDetails(null);
-			} else {
+			// Fetch content details (skip for youtube - no TMDB/custom record)
+			if (res.data.media_type === "movie" || res.data.media_type === "tv") {
 				const endpoint = res.data.media_type === "movie" ? "movies" : "tv";
 				console.log(
 					`Step 3: Fetching ${endpoint} details for ID:`,
@@ -546,6 +573,11 @@ const WatchPartyPage = () => {
 					movieRes.data.title || movieRes.data.name
 				);
 				setMovieDetails(movieRes.data);
+			} else if (res.data.media_type === "custom" && res.data.custom_content_id) {
+				const customRes = await axios.get(
+					`${API}/custom-content/${res.data.custom_content_id}`
+				);
+				setCustomContentDetails(customRes.data);
 			}
 
 			toast.success("Joined watch party!");
@@ -586,13 +618,26 @@ const WatchPartyPage = () => {
 			reconnectionAttempts: 5,
 			reconnectionDelay: 1000,
 			withCredentials: true,
+			// Lets the server verify our real identity at connect time (see
+			// resolve_verified_user_id in server.py) instead of trusting the
+			// user_id field join_room sends - that field alone is forgeable,
+			// since host_id is public (returned to every joiner), so this is
+			// what host-only enforcement actually rests on. OAuth sessions
+			// have no bearer token here; the session cookie travels on the
+			// handshake itself via withCredentials and is verified the same way.
+			auth: token && token !== "oauth_cookie" ? { token } : {},
 		});
+		setSocket(socketRef.current);
 
 		socketRef.current.on("connect", () => {
 			console.log("✅ Socket connected! ID:", socketRef.current.id);
 			socketRef.current.emit("join_room", {
 				room_id: roomId,
 				user_name: identity?.name || "Anonymous",
+				// Bound server-side at join time and checked against the room's
+				// host_id for every host_* command - this is what real
+				// enforcement rests on, not anything the UI merely hides.
+				user_id: identity?.id,
 			});
 		});
 
@@ -627,104 +672,14 @@ const WatchPartyPage = () => {
 			setParticipants((prev) => prev.filter((p) => p.name !== data.user_name));
 		});
 
-		// Initial sync when joining - receive current playback state
-		socketRef.current.on("initial_sync", (data) => {
-			console.log("🎬 Received initial sync:", data);
-			isSyncingRef.current = true;
-
-			setIsPlaying(data.is_playing);
-			setCurrentTime(data.current_time);
-
-			if (data.is_playing) {
-				playbackStartTimeRef.current = Date.now();
-				toast.success("Synced to current playback position");
-			}
-
-			// Sync source if provided
-			if (data.source) {
-				const sourceIndex = STREAMING_SOURCES.findIndex(
-					(s) => s.id === data.source
-				);
-				if (sourceIndex !== -1) {
-					setSelectedSource(STREAMING_SOURCES[sourceIndex]);
-					setCurrentSourceIndex(sourceIndex);
-				}
-			}
-
-			setTimeout(() => {
-				isSyncingRef.current = false;
-			}, 500);
-		});
-
-		socketRef.current.on("playback_sync", (data) => {
-			console.log("📺 Playback sync received:", data);
-
-			// Set syncing flag to prevent sync loops
-			isSyncingRef.current = true;
-
-			// Calculate drift using state updater to avoid stale closure
-			setCurrentTime((prevTime) => {
-				setIsPlaying((prevPlaying) => {
-					// Calculate drift if we're playing
-					if (prevPlaying && data.is_playing) {
-						const drift = Math.abs(prevTime - data.current_time);
-						if (drift > 3) {
-							console.log(`⏰ Drift detected: ${drift.toFixed(1)}s - correcting`);
-							toast.info(
-								`Syncing playback (${drift.toFixed(1)}s difference)`,
-								{ duration: 2000 }
-							);
-						}
-					}
-					return data.is_playing;
-				});
-
-				// Reset playback start time when receiving sync
-				if (data.is_playing) {
-					playbackStartTimeRef.current = Date.now();
-				} else {
-					playbackStartTimeRef.current = null;
-				}
-
-				return data.current_time;
-			});
-
-			// Sync source if provided
-			if (data.source) {
-				const sourceIndex = STREAMING_SOURCES.findIndex(
-					(s) => s.id === data.source
-				);
-				if (sourceIndex !== -1) {
-					console.log(
-						"🔄 Syncing to source:",
-						STREAMING_SOURCES[sourceIndex].name
-					);
-					setSelectedSource(STREAMING_SOURCES[sourceIndex]);
-					setCurrentSourceIndex(sourceIndex);
-					toast.info(
-						`Source changed to ${STREAMING_SOURCES[sourceIndex].name}`
-					);
-				}
-			}
-
-			// Show sync notification
-			if (data.user_name && data.user_name !== identity?.name) {
-				const action = data.is_playing
-					? "▶️ resumed playback"
-					: "⏸️ paused playback";
-				toast.info(`${data.user_name} ${action}`, { duration: 2000 });
-			}
-
-			// Clear syncing flag after a short delay
-			setTimeout(() => {
-				isSyncingRef.current = false;
-			}, 500);
-		});
-
-		// Host swapped what's playing (movie/TV <-> YouTube) mid-party
-		socketRef.current.on("content_changed", async (data) => {
-			console.log("🔀 Content changed:", data);
-			isSyncingRef.current = true;
+		// Playback sync itself (sync_state/countdown_started/participant_ready/
+		// host_command_rejected) is handled entirely inside useWatchPartySync,
+		// subscribed to the `socket` state set above. This listener only
+		// covers the page-level side effects of a media change that aren't
+		// the engine's concern: updating currentParty, fetching the new
+		// content's details, and resetting the ready/countdown flow.
+		socketRef.current.on("media_changed", async (data) => {
+			console.log("🔀 Media changed:", data);
 
 			setCurrentParty((prev) =>
 				prev
@@ -733,16 +688,15 @@ const WatchPartyPage = () => {
 							media_type: data.media_type,
 							movie_id: data.movie_id,
 							youtube_video_id: data.youtube_video_id,
+							custom_content_id: data.custom_content_id,
 					  }
 					: prev
 			);
-			setIsPlaying(false);
-			setCurrentTime(0);
-			playbackStartTimeRef.current = null;
+			setHasEverPlayed(false);
+			setMovieDetails(null);
+			setCustomContentDetails(null);
 
-			if (data.media_type === "youtube") {
-				setMovieDetails(null);
-			} else if (data.movie_id) {
+			if (data.media_type === "movie" || data.media_type === "tv") {
 				try {
 					const endpoint = data.media_type === "movie" ? "movies" : "tv";
 					const res = await axios.get(`${API}/${endpoint}/${data.movie_id}`);
@@ -750,38 +704,18 @@ const WatchPartyPage = () => {
 				} catch (err) {
 					console.error("Failed to load new content details:", err);
 				}
+			} else if (data.media_type === "custom" && data.custom_content_id) {
+				try {
+					const res = await axios.get(`${API}/custom-content/${data.custom_content_id}`);
+					setCustomContentDetails(res.data);
+				} catch (err) {
+					console.error("Failed to load new custom content details:", err);
+				}
 			}
 
 			if (data.user_name && data.user_name !== identity?.name) {
 				toast.info(`${data.user_name} changed what's playing`);
 			}
-
-			setTimeout(() => {
-				isSyncingRef.current = false;
-			}, 500);
-		});
-
-		// Position update event - continuous sync from host
-		socketRef.current.on("position_update", (data) => {
-			// Store data for drift correction check in a state updater
-			setCurrentTime((prevTime) => {
-				// Only sync if we're playing and drift is significant
-				if (data.is_playing && !isSyncingRef.current) {
-					const drift = Math.abs(prevTime - data.current_time);
-
-					// Only correct if drift is significant (>2 seconds)
-					if (drift > 2) {
-						console.log(`🔄 Auto-correcting drift: ${drift.toFixed(1)}s`);
-						isSyncingRef.current = true;
-						playbackStartTimeRef.current = Date.now();
-						setTimeout(() => {
-							isSyncingRef.current = false;
-						}, 500);
-						return data.current_time;
-					}
-				}
-				return prevTime;
-			});
 		});
 
 		socketRef.current.on("new_message", (data) => {
@@ -923,7 +857,7 @@ const WatchPartyPage = () => {
 		socketRef.current.on("disconnect", () => {
 			console.log("Disconnected from socket");
 		});
-	}, [roomId, identity, createPeerConnection, handleOffer, navigate]);
+	}, [roomId, identity, token, createPeerConnection, handleOffer, navigate]);
 
 	useEffect(() => {
 		if (!roomId) {
@@ -975,75 +909,33 @@ const WatchPartyPage = () => {
 		};
 	}, [localStream, isInCall]);
 
-	// Continuous position tracking - broadcasts position every 2 seconds when playing
+	// Periodic host heartbeat: keeps the server's authoritative current_time
+	// fresh (both for other clients' drift correction and for a late
+	// joiner's elapsed-time-compensated starting position) - replaces the
+	// old continuous-position-tracking + seek-detection effects, which did
+	// the same job by hand for the single YouTube-only path. Seeks from the
+	// host's own custom-control-bar interactions go through hostSeek()
+	// directly (immediate), this is just the steady drip in between.
 	useEffect(() => {
-		if (!isPlaying || !socketRef.current || !currentParty || isSyncingRef.current) {
-			playbackStartTimeRef.current = null;
-			return;
-		}
-
-		// Set the start time when playback begins
-		if (!playbackStartTimeRef.current) {
-			playbackStartTimeRef.current = Date.now();
-		}
-
-		const interval = setInterval(() => {
-			// Calculate elapsed time since playback started
-			const elapsedSeconds =
-				(Date.now() - playbackStartTimeRef.current) / 1000;
-			const estimatedTime = currentTime + elapsedSeconds;
-
-			// Only broadcast if we're the host (to reduce network traffic)
-			// Other participants will sync to the host's broadcasts
-			const isHost =
-				!!identity &&
-				!identity.isGuest &&
-				(currentParty?.host_id === identity.id ||
-					currentParty?.host_name === identity.name);
-
-			if (isHost && socketRef.current) {
-				socketRef.current.emit("position_update", {
-					room_id: roomId,
-					current_time: estimatedTime,
-					is_playing: true,
-					user_name: identity?.name,
-				});
-			}
-		}, 2000); // Broadcast every 2 seconds
-
+		if (!isHost || !watchParty.isPlaying) return;
+		// watchParty.engine is a stable ref-held instance (unlike the
+		// watchParty object itself, which is a fresh literal every render) -
+		// depend on that, not the whole hook result, so this interval isn't
+		// torn down and recreated on every re-render.
+		const engine = watchParty.engine;
+		const interval = setInterval(() => engine.hostHeartbeat(), 2000);
 		return () => clearInterval(interval);
-	}, [isPlaying, currentTime, roomId, currentParty, identity]);
+	}, [isHost, watchParty.isPlaying, watchParty.engine]);
 
-	// Seek detection - detects when user seeks and broadcasts the new position
+	// Latch hasEverPlayed the moment real playback actually starts (the GO
+	// moment, or a late joiner's first sync_state already mid-playback) -
+	// without this, countdownPhase falls back to "waiting" again as soon as
+	// countdownSeconds resets to null after the brief "GO!" flash, re-showing
+	// the waiting/countdown overlay (and its pointer-blocking backdrop) over
+	// an already-playing video forever.
 	useEffect(() => {
-		// Skip if we're currently syncing from remote
-		if (isSyncingRef.current) return;
-
-		const now = Date.now();
-		// Avoid duplicate broadcasts within 1 second
-		if (now - lastSyncTimeRef.current < 1000) return;
-
-		// If currentTime changed significantly and we have a start time, it might be a seek
-		if (playbackStartTimeRef.current && isPlaying) {
-			const elapsedSeconds =
-				(now - playbackStartTimeRef.current) / 1000;
-			const expectedTime = currentTime;
-			const actualElapsedTime = elapsedSeconds;
-
-			// If difference > 3 seconds, likely a seek event
-			if (Math.abs(actualElapsedTime - expectedTime) > 3) {
-				console.log("🔍 Seek detected, broadcasting new position");
-				socketRef.current?.emit("sync_playback", {
-					room_id: roomId,
-					is_playing: isPlaying,
-					current_time: currentTime,
-					user_name: identity?.name,
-				});
-				lastSyncTimeRef.current = now;
-				playbackStartTimeRef.current = now; // Reset the start time
-			}
-		}
-	}, [currentTime, isPlaying, roomId, identity]);
+		if (watchParty.isPlaying) setHasEverPlayed(true);
+	}, [watchParty.isPlaying]);
 
 	const startCall = async () => {
 		try {
@@ -1230,8 +1122,9 @@ const WatchPartyPage = () => {
 
 	// Set up the YouTube IFrame Player for youtube-content parties. Unlike the
 	// vidsrc-style embeds (opaque third-party iframes with no control API),
-	// YouTube's own player exposes real JS control, so this is the one content
-	// type that gets true enforced sync rather than an advisory toast.
+	// YouTube's own player exposes real JS control, so this is one of the two
+	// content types (the other being self-hosted uploads) that gets true
+	// hard sync through WatchPartySyncEngine rather than an advisory toast.
 	useEffect(() => {
 		if (currentParty?.media_type !== "youtube" || !currentParty?.youtube_video_id) {
 			return;
@@ -1258,7 +1151,12 @@ const WatchPartyPage = () => {
 				width: "100%",
 				height: "100%",
 				videoId: currentParty.youtube_video_id,
-				playerVars: { autoplay: 0, controls: 1, rel: 0 },
+				// controls:0 - all playback control goes through WatchPartyPlayer's
+				// own branded control bar (host-gated there), not YouTube's native
+				// chrome, so a participant has nothing to directly interact with
+				// in the first place (a UX nicety; the real enforcement is the
+				// server rejecting any host_* command not from the actual host).
+				playerVars: { autoplay: 0, controls: 0, rel: 0 },
 				events: {
 					onReady: (event) => {
 						// The width/height passed to YT.Player() above become HTML
@@ -1275,49 +1173,28 @@ const WatchPartyPage = () => {
 							iframeEl.style.height = "100%";
 						}
 
-						// Read the ref, not the closured currentTime/isPlaying - a
-						// sync can have arrived and updated state after this
-						// effect started (the player takes a moment to load) but
-						// before onReady actually fires, and closing over the
-						// effect's own render would miss it.
-						const { isPlaying: latestIsPlaying, currentTime: latestTime } =
-							latestPlaybackRef.current;
-						if (latestTime) event.target.seekTo(latestTime, true);
-						if (latestIsPlaying) event.target.playVideo();
+						// Only hand the adapter to the engine once the player is
+						// genuinely ready - the engine re-applies whatever the
+						// latest known sync state was the moment it receives an
+						// adapter, so there's no race to separately guard against
+						// here (see WatchPartySyncEngine.setAdapter).
+						watchParty.setAdapter(new YouTubeWatchPartyPlayer(youtubePlayerRef));
+						watchParty.reportReady();
 					},
 					onStateChange: (event) => {
 						// Buffering reflects reality regardless of who triggered the
-						// state change, so it's tracked outside the sync-echo guard
-						// below (which only exists to stop us re-broadcasting a sync
-						// event we just received).
+						// state change.
 						setIsBuffering(event.data === window.YT.PlayerState.BUFFERING);
 
-						// Ignore state changes we caused ourselves via a remote sync
-						if (isSyncingRef.current) return;
-
 						if (event.data === window.YT.PlayerState.PLAYING) {
-							const time = event.target.getCurrentTime();
-							lastSyncTimeRef.current = Date.now();
-							playbackStartTimeRef.current = Date.now();
-							setIsPlaying(true);
-							setCurrentTime(time);
-							socketRef.current?.emit("sync_playback", {
-								room_id: roomId,
-								is_playing: true,
-								current_time: time,
-								user_name: identity?.name,
+							watchParty.notifyLocalStateChange({
+								isPlaying: true,
+								currentTime: event.target.getCurrentTime(),
 							});
 						} else if (event.data === window.YT.PlayerState.PAUSED) {
-							const time = event.target.getCurrentTime();
-							lastSyncTimeRef.current = Date.now();
-							playbackStartTimeRef.current = null;
-							setIsPlaying(false);
-							setCurrentTime(time);
-							socketRef.current?.emit("sync_playback", {
-								room_id: roomId,
-								is_playing: false,
-								current_time: time,
-								user_name: identity?.name,
+							watchParty.notifyLocalStateChange({
+								isPlaying: false,
+								currentTime: event.target.getCurrentTime(),
 							});
 						}
 					},
@@ -1331,31 +1208,6 @@ const WatchPartyPage = () => {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [currentParty?.media_type, currentParty?.youtube_video_id, isSharingScreen]);
 
-	// Drive the YouTube player from isPlaying, regardless of what triggered the
-	// change (manual header button, or a playback_sync/initial_sync from a peer)
-	useEffect(() => {
-		if (currentParty?.media_type !== "youtube") return;
-		const player = youtubePlayerRef.current;
-		if (!player || typeof player.playVideo !== "function") return;
-		if (isPlaying) {
-			player.playVideo();
-		} else {
-			player.pauseVideo();
-		}
-	}, [isPlaying, currentParty?.media_type]);
-
-	// Correct drift by seeking the YouTube player when a remote sync moved
-	// currentTime meaningfully out from under the local player's position.
-	useEffect(() => {
-		if (currentParty?.media_type !== "youtube" || !isSyncingRef.current) return;
-		const player = youtubePlayerRef.current;
-		if (!player || typeof player.seekTo !== "function") return;
-		const playerTime = player.getCurrentTime?.() ?? 0;
-		if (Math.abs(playerTime - currentTime) > 1.5) {
-			player.seekTo(currentTime, true);
-		}
-	}, [currentTime, currentParty?.media_type]);
-
 	// Tear down the YouTube player when leaving a youtube party / unmounting
 	useEffect(() => {
 		return () => {
@@ -1365,6 +1217,79 @@ const WatchPartyPage = () => {
 			youtubePlayerRef.current = null;
 		};
 	}, [roomId]);
+
+	// Movie/TV (vidsrc-style embed) adapter: no real DOM dependency to wait
+	// on - there's no control API for this content type at all, hard or
+	// otherwise, so the adapter is just a local estimate-tracker (see
+	// TmdbWatchPartyPlayer). No countdown/ready-check applies to this media
+	// type; mark it ready immediately so nothing waits on a signal that will
+	// never come.
+	useEffect(() => {
+		if (currentParty?.media_type !== "movie" && currentParty?.media_type !== "tv") return;
+		const adapter = new TmdbWatchPartyPlayer();
+		adapter.markReady();
+		tmdbAdapterRef.current = adapter;
+		watchParty.setAdapter(adapter);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [currentParty?.media_type, currentParty?.movie_id]);
+
+	// Self-hosted upload adapter: wraps the <video> element rendered by
+	// WatchPartyPlayer for media_type "custom". True hard sync, same tier as
+	// YouTube - only hand it to the engine once the element can actually
+	// report a position (loadedmetadata), mirroring the YouTube onReady gate.
+	useEffect(() => {
+		if (currentParty?.media_type !== "custom" || !customContentDetails) return;
+		const el = customVideoRef.current;
+		if (!el) return;
+
+		const onLoadedMetadata = () => {
+			watchParty.setAdapter(new CustomWatchPartyPlayer(customVideoRef));
+			watchParty.reportReady();
+		};
+		if (el.readyState >= 1) {
+			onLoadedMetadata();
+		} else {
+			el.addEventListener("loadedmetadata", onLoadedMetadata);
+		}
+
+		const onPlay = () =>
+			watchParty.notifyLocalStateChange({ isPlaying: true, currentTime: el.currentTime });
+		const onPause = () =>
+			watchParty.notifyLocalStateChange({ isPlaying: false, currentTime: el.currentTime });
+		el.addEventListener("play", onPlay);
+		el.addEventListener("pause", onPause);
+
+		return () => {
+			el.removeEventListener("loadedmetadata", onLoadedMetadata);
+			el.removeEventListener("play", onPlay);
+			el.removeEventListener("pause", onPause);
+		};
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [currentParty?.media_type, customContentDetails]);
+
+	// Toast when playback state changes due to someone ELSE's action (skips
+	// the very first sync received on join, which already gets its own
+	// "Joined watch party!" toast and shouldn't also announce itself as a
+	// "someone resumed playback" notice).
+	const hasShownFirstSyncRef = useRef(false);
+	useEffect(() => {
+		if (!hasShownFirstSyncRef.current) {
+			hasShownFirstSyncRef.current = true;
+			return;
+		}
+		if (watchParty.lastSyncUserName && watchParty.lastSyncUserName !== identity?.name) {
+			const action = watchParty.isPlaying ? "▶️ resumed playback" : "⏸️ paused playback";
+			toast.info(`${watchParty.lastSyncUserName} ${action}`, { duration: 2000 });
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [watchParty.isPlaying, watchParty.lastSyncUserName]);
+
+	// Surface server-side rejections (e.g. a stale UI state briefly let a
+	// non-host attempt a host action) - this is the real enforcement path,
+	// the UI gating elsewhere is just the normal-case nicety.
+	useEffect(() => {
+		if (watchParty.rejectedReason) toast.error(watchParty.rejectedReason);
+	}, [watchParty.rejectedReason]);
 
 	const searchMovies = async () => {
 		if (!searchQuery.trim()) return;
@@ -1382,24 +1307,29 @@ const WatchPartyPage = () => {
 		}
 	};
 
-	const createParty = async () => {
-		const isYoutube = createContentTab === "youtube";
+	// GET /custom-content is already public/unauthenticated (an existing
+	// endpoint, unchanged) - lists everyone's uploads, same as CustomContentPage.
+	const fetchCustomContent = async () => {
+		try {
+			const res = await axios.get(`${API}/custom-content`);
+			setCustomContentList(res.data?.results || []);
+		} catch (error) {
+			console.error("Failed to load custom content:", error);
+		}
+	};
 
+	const createParty = async () => {
 		if (!partyName.trim()) {
 			toast.error("Please enter a party name");
 			return;
 		}
-		if (isYoutube && !youtubeUrlInput.trim()) {
-			toast.error("Please paste a YouTube link or video ID");
-			return;
-		}
-		if (!isYoutube && !selectedMovie) {
-			toast.error("Please select a movie or show");
-			return;
-		}
 
 		let payload;
-		if (isYoutube) {
+		if (createContentTab === "youtube") {
+			if (!youtubeUrlInput.trim()) {
+				toast.error("Please paste a YouTube link or video ID");
+				return;
+			}
 			const videoId = extractYoutubeVideoId(youtubeUrlInput.trim());
 			if (!videoId) {
 				toast.error("Invalid YouTube URL. Paste a link or an 11-character video ID");
@@ -1410,7 +1340,21 @@ const WatchPartyPage = () => {
 				media_type: "youtube",
 				youtube_video_id: videoId,
 			};
+		} else if (createContentTab === "custom") {
+			if (!selectedCustomContent) {
+				toast.error("Please select something from your uploads");
+				return;
+			}
+			payload = {
+				name: partyName,
+				media_type: "custom",
+				custom_content_id: selectedCustomContent.content_id,
+			};
 		} else {
+			if (!selectedMovie) {
+				toast.error("Please select a movie or show");
+				return;
+			}
 			payload = {
 				name: partyName,
 				movie_id: selectedMovie.id,
@@ -1442,41 +1386,24 @@ const WatchPartyPage = () => {
 		}
 	};
 
+	// Host-only (the UI only exposes this button to the host; the server
+	// independently rejects it from anyone else regardless). Drives the
+	// active adapter directly and broadcasts via WatchPartySyncEngine.
 	const togglePlayback = () => {
-		const newState = !isPlaying;
-		setIsPlaying(newState);
-
-		// Reset or set playback start time
-		if (newState) {
-			playbackStartTimeRef.current = Date.now();
+		if (watchParty.isPlaying) {
+			watchParty.hostPause();
+			toast.success("⏸️ Paused playback");
 		} else {
-			playbackStartTimeRef.current = null;
+			watchParty.hostPlay();
+			toast.success("▶️ Resumed playback");
 		}
-
-		lastSyncTimeRef.current = Date.now();
-		socketRef.current?.emit("sync_playback", {
-			room_id: roomId,
-			is_playing: newState,
-			current_time: currentTime,
-			user_name: identity?.name,
-		});
-		toast.success(newState ? "▶️ Resumed playback" : "⏸️ Paused playback");
 	};
 
-	// Custom progress-bar seek (YouTube only - seekTo() is called directly by
-	// the player control for instant feedback; this just broadcasts the new
-	// position, mirroring the same fields the onStateChange sync already
-	// sends after any play/pause transition).
-	const handleYoutubeSeek = (time) => {
-		lastSyncTimeRef.current = Date.now();
-		playbackStartTimeRef.current = isPlaying ? Date.now() : null;
-		setCurrentTime(time);
-		socketRef.current?.emit("sync_playback", {
-			room_id: roomId,
-			is_playing: isPlaying,
-			current_time: time,
-			user_name: identity?.name,
-		});
+	// Custom progress-bar seek (hard-sync adapters only - YouTube/custom
+	// upload). The control itself already called adapter.seekTo() for
+	// instant local feedback before this fires; hostSeek() broadcasts it.
+	const handleHostSeek = (time) => {
+		watchParty.hostSeek(time);
 	};
 
 	const sendMessage = (e) => {
@@ -1611,20 +1538,14 @@ const WatchPartyPage = () => {
 		return selectedSource.getUrl(mediaType, movieId);
 	};
 
+	// Which vidsrc mirror to use doesn't change WHAT'S playing, just HOW it's
+	// streamed - unlike actual playback control, this is personal/local per
+	// participant now (useful precisely when the shared mirror is unreliable
+	// for just one person), not broadcast or host-gated.
 	const tryNextSource = () => {
 		const nextIndex = (currentSourceIndex + 1) % (STREAMING_SOURCES.length - 1); // Skip "Trailer Only"
 		setCurrentSourceIndex(nextIndex);
 		setSelectedSource(STREAMING_SOURCES[nextIndex]);
-
-		// Sync source change with other participants
-		socketRef.current?.emit("sync_playback", {
-			room_id: roomId,
-			is_playing: isPlaying,
-			current_time: currentTime,
-			source: STREAMING_SOURCES[nextIndex].id,
-			user_name: identity?.name,
-		});
-
 		toast.success(`Switched to ${STREAMING_SOURCES[nextIndex].name}`);
 	};
 
@@ -1636,52 +1557,41 @@ const WatchPartyPage = () => {
 				: STREAMING_SOURCES.findIndex((s) => s.id === source.id)
 		);
 		setShowSourcePicker(false);
-
-		// Sync source change with other participants
-		socketRef.current?.emit("sync_playback", {
-			room_id: roomId,
-			is_playing: isPlaying,
-			current_time: currentTime,
-			source: source.id,
-			user_name: identity?.name,
-		});
-
 		toast.success(`Switched to ${source.name}`);
 	};
 
 	const submitContentChange = () => {
-		const isYoutube = createContentTab === "youtube";
-
-		if (isYoutube) {
+		if (createContentTab === "youtube") {
 			const videoId = extractYoutubeVideoId(youtubeUrlInput.trim());
 			if (!videoId) {
 				toast.error("Invalid YouTube URL. Paste a link or an 11-character video ID");
 				return;
 			}
-			socketRef.current?.emit("content_change", {
-				room_id: roomId,
-				media_type: "youtube",
-				movie_id: null,
-				youtube_video_id: videoId,
-				user_name: identity?.name,
+			watchParty.hostChangeMedia({ media_type: "youtube", youtube_video_id: videoId });
+		} else if (createContentTab === "custom") {
+			if (!selectedCustomContent) {
+				toast.error("Please select something from your uploads");
+				return;
+			}
+			watchParty.hostChangeMedia({
+				media_type: "custom",
+				custom_content_id: selectedCustomContent.content_id,
 			});
 		} else {
 			if (!selectedMovie) {
 				toast.error("Please select a movie or show");
 				return;
 			}
-			socketRef.current?.emit("content_change", {
-				room_id: roomId,
+			watchParty.hostChangeMedia({
 				media_type: selectedMovie.media_type || "movie",
 				movie_id: selectedMovie.id,
-				youtube_video_id: null,
-				user_name: identity?.name,
 			});
 		}
 
 		setChangeContentDialogOpen(false);
 		setYoutubeUrlInput("");
 		setSelectedMovie(null);
+		setSelectedCustomContent(null);
 		setSearchResults([]);
 		setSearchQuery("");
 	};
@@ -1750,6 +1660,20 @@ const WatchPartyPage = () => {
 											}`}>
 											YouTube
 										</button>
+										<button
+											type="button"
+											onClick={() => {
+												setCreateContentTab("custom");
+												if (customContentList.length === 0) fetchCustomContent();
+											}}
+											data-testid="tab-custom"
+											className={`flex-1 py-2 rounded-md text-sm font-medium transition-all ${
+												createContentTab === "custom"
+													? "bg-[#7C3AED] text-white"
+													: "text-[#A1A1AA] hover:text-white"
+											}`}>
+											My Uploads
+										</button>
 									</div>
 
 									{createContentTab === "youtube" ? (
@@ -1761,6 +1685,37 @@ const WatchPartyPage = () => {
 											data-testid="youtube-url-input"
 											className="bg-black/50 border-white/10 text-sm md:text-base"
 										/>
+									) : createContentTab === "custom" ? (
+										<div className="max-h-60 overflow-y-auto space-y-2">
+											{customContentList.length === 0 ? (
+												<p className="text-sm text-[#A1A1AA] text-center py-4">
+													No uploads yet - add one from "My Uploads" first.
+												</p>
+											) : (
+												customContentList.map((item) => (
+													<div
+														key={item.content_id}
+														onClick={() => setSelectedCustomContent(item)}
+														data-testid={`custom-result-${item.content_id}`}
+														className={`flex items-center gap-2 md:gap-3 p-2 rounded-lg cursor-pointer transition-all ${
+															selectedCustomContent?.content_id === item.content_id
+																? "bg-[#7C3AED]/20 border border-[#7C3AED]"
+																: "bg-white/5 hover:bg-white/10"
+														}`}>
+														{item.poster_url && (
+															<img
+																src={item.poster_url}
+																alt={item.title}
+																className="w-10 h-14 md:w-12 md:h-16 object-cover rounded flex-shrink-0"
+															/>
+														)}
+														<p className="font-medium text-sm md:text-base truncate">
+															{item.title}
+														</p>
+													</div>
+												))
+											)}
+										</div>
 									) : (
 										<>
 											<div className="flex flex-col sm:flex-row gap-2">
@@ -1825,6 +1780,8 @@ const WatchPartyPage = () => {
 											!partyName.trim() ||
 											(createContentTab === "youtube"
 												? !youtubeUrlInput.trim()
+												: createContentTab === "custom"
+												? !selectedCustomContent
 												: !selectedMovie)
 										}
 										data-testid="confirm-create-party"
@@ -1965,6 +1922,7 @@ const WatchPartyPage = () => {
 	const title =
 		movieDetails?.title ||
 		movieDetails?.name ||
+		customContentDetails?.title ||
 		(currentParty?.media_type === "youtube" ? "YouTube video" : undefined);
 	const remoteStreamEntries = Object.entries(remoteStreams);
 
@@ -1974,11 +1932,6 @@ const WatchPartyPage = () => {
 		: remoteStreamEntries;
 
 	const showEmbeddedPlayer = streamingUrl && selectedSource.id !== "trailer";
-	const isCreator =
-		!!identity &&
-		!identity.isGuest &&
-		(currentParty?.host_id === identity.id ||
-			currentParty?.host_name === identity.name);
 	const remoteScreenShareStream = activeScreenShare
 		? remoteStreams[activeScreenShare.sid]
 		: null;
@@ -1990,7 +1943,7 @@ const WatchPartyPage = () => {
 	// overlaid control bar, matching the redesign's two-layer structure.
 	const headerActions = (
 		<>
-			{isCreator && (
+			{isHost && (
 				<Dialog open={changeContentDialogOpen} onOpenChange={setChangeContentDialogOpen}>
 					<DialogTrigger asChild>
 						<button
@@ -2026,6 +1979,19 @@ const WatchPartyPage = () => {
 									}`}>
 									YouTube
 								</button>
+								<button
+									type="button"
+									onClick={() => {
+										setCreateContentTab("custom");
+										if (customContentList.length === 0) fetchCustomContent();
+									}}
+									className={`flex-1 py-2 rounded-md text-sm font-medium transition-all ${
+										createContentTab === "custom"
+											? "bg-[#7C3AED] text-white"
+											: "text-[#A1A1AA] hover:text-white"
+									}`}>
+									My Uploads
+								</button>
 							</div>
 
 							{createContentTab === "youtube" ? (
@@ -2036,6 +2002,34 @@ const WatchPartyPage = () => {
 									onKeyDown={(e) => e.key === "Enter" && submitContentChange()}
 									className="bg-black/50 border-white/10 text-sm md:text-base"
 								/>
+							) : createContentTab === "custom" ? (
+								<div className="max-h-60 overflow-y-auto space-y-2">
+									{customContentList.length === 0 ? (
+										<p className="text-sm text-[#A1A1AA] text-center py-4">
+											No uploads yet - add one from "My Uploads" first.
+										</p>
+									) : (
+										customContentList.map((item) => (
+											<div
+												key={item.content_id}
+												onClick={() => setSelectedCustomContent(item)}
+												className={`flex items-center gap-2 md:gap-3 p-2 rounded-lg cursor-pointer transition-all ${
+													selectedCustomContent?.content_id === item.content_id
+														? "bg-[#7C3AED]/20 border border-[#7C3AED]"
+														: "bg-white/5 hover:bg-white/10"
+												}`}>
+												{item.poster_url && (
+													<img
+														src={item.poster_url}
+														alt={item.title}
+														className="w-10 h-14 md:w-12 md:h-16 object-cover rounded flex-shrink-0"
+													/>
+												)}
+												<p className="font-medium text-sm md:text-base truncate">{item.title}</p>
+											</div>
+										))
+									)}
+								</div>
 							) : (
 								<>
 									<div className="flex flex-col sm:flex-row gap-2">
@@ -2162,7 +2156,7 @@ const WatchPartyPage = () => {
 				</Dialog>
 			)}
 
-			{isCreator && (
+			{isHost && (
 				<button
 					onClick={deleteParty}
 					data-testid="delete-party-btn"
@@ -2175,60 +2169,90 @@ const WatchPartyPage = () => {
 		</>
 	);
 
+	const isHardSyncMedia = currentParty?.media_type === "youtube" || currentParty?.media_type === "custom";
+	// Pre-start overlay (waiting-for-host / countdown) only applies to
+	// hard-sync media that hasn't started yet - TMDB has no real readiness
+	// signal and no way to guarantee a synchronized start, so it skips
+	// straight to advisory playback same as always.
+	const countdownPhase = !isHardSyncMedia
+		? null
+		: hasEverPlayed
+		? null
+		: watchParty.countdownSeconds !== null
+		? "countdown"
+		: "waiting";
+
 	return (
-		<WatchPartyRoom
-			partyName={currentParty?.name}
-			onBack={() => navigate("/watch-party")}
-			headerActions={headerActions}
-			isCreator={isCreator}
-			mediaType={currentParty?.media_type}
-			title={title}
-			backdropPath={
-				movieDetails?.backdrop_path ? `${IMAGE_BASE}original${movieDetails.backdrop_path}` : null
-			}
-			isPlaying={isPlaying}
-			currentTime={currentTime}
-			isBuffering={isBuffering}
-			onTogglePlayback={togglePlayback}
-			youtubeContainerRef={youtubeContainerRef}
-			youtubePlayerRef={youtubePlayerRef}
-			onYoutubeSeek={handleYoutubeSeek}
-			showEmbeddedPlayer={showEmbeddedPlayer}
-			streamingUrl={streamingUrl}
-			selectedSource={selectedSource}
-			showSourcePicker={showSourcePicker}
-			setShowSourcePicker={setShowSourcePicker}
-			streamingSources={STREAMING_SOURCES}
-			changeSource={changeSource}
-			tryNextSource={tryNextSource}
-			trailerKey={trailerKey}
-			activeScreenShare={activeScreenShare}
-			isSharingScreen={isSharingScreen}
-			remoteScreenShareStream={remoteScreenShareStream}
-			isInCall={isInCall}
-			onStartCall={startCall}
-			onEndCall={endCall}
-			localStream={localStream}
-			localVideoRef={localVideoRef}
-			isVideoEnabled={isVideoEnabled}
-			onToggleVideo={toggleVideo}
-			isAudioEnabled={isAudioEnabled}
-			onToggleAudio={toggleAudio}
-			onStartScreenShare={startScreenShare}
-			onStopScreenShare={stopScreenShare}
-			remoteStreamEntries={filteredRemoteStreams}
-			peerNames={peerNames}
-			peerMediaState={peerMediaState}
-			identity={identity}
-			participantCount={participants.length}
-			isChatOpen={isChatOpen}
-			setIsChatOpen={setIsChatOpen}
-			messages={messages}
-			chatRef={chatRef}
-			newMessage={newMessage}
-			setNewMessage={setNewMessage}
-			onSendMessage={sendMessage}
-		/>
+		<>
+			<WatchPartyRoom
+				partyName={currentParty?.name}
+				onBack={() => navigate("/watch-party")}
+				headerActions={headerActions}
+				isCreator={isHost}
+				mediaType={currentParty?.media_type}
+				title={title}
+				backdropPath={
+					movieDetails?.backdrop_path
+						? `${IMAGE_BASE}original${movieDetails.backdrop_path}`
+						: customContentDetails?.backdrop_url || null
+				}
+				isHost={isHost}
+				isPlaying={watchParty.isPlaying}
+				currentTime={watchParty.currentTime}
+				isBuffering={isBuffering}
+				onTogglePlayback={togglePlayback}
+				youtubeContainerRef={youtubeContainerRef}
+				youtubePlayerRef={youtubePlayerRef}
+				customVideoRef={customVideoRef}
+				customVideoUrl={customContentDetails?.video_url ? `${BACKEND_URL}${customContentDetails.video_url}` : null}
+				onHostSeek={handleHostSeek}
+				showEmbeddedPlayer={showEmbeddedPlayer}
+				streamingUrl={streamingUrl}
+				selectedSource={selectedSource}
+				showSourcePicker={showSourcePicker}
+				setShowSourcePicker={setShowSourcePicker}
+				streamingSources={STREAMING_SOURCES}
+				changeSource={changeSource}
+				tryNextSource={tryNextSource}
+				trailerKey={trailerKey}
+				activeScreenShare={activeScreenShare}
+				isSharingScreen={isSharingScreen}
+				remoteScreenShareStream={remoteScreenShareStream}
+				countdownOverlay={
+					<WatchPartyCountdownOverlay
+						phase={countdownPhase}
+						countdownSeconds={watchParty.countdownSeconds}
+						readyStatus={watchParty.readyStatus}
+						hostName={currentParty?.host_name}
+						isHost={isHost}
+						onStartWatchParty={watchParty.startWatchParty}
+					/>
+				}
+				isInCall={isInCall}
+				onStartCall={startCall}
+				onEndCall={endCall}
+				localStream={localStream}
+				localVideoRef={localVideoRef}
+				isVideoEnabled={isVideoEnabled}
+				onToggleVideo={toggleVideo}
+				isAudioEnabled={isAudioEnabled}
+				onToggleAudio={toggleAudio}
+				onStartScreenShare={startScreenShare}
+				onStopScreenShare={stopScreenShare}
+				remoteStreamEntries={filteredRemoteStreams}
+				peerNames={peerNames}
+				peerMediaState={peerMediaState}
+				identity={identity}
+				participantCount={participants.length}
+				isChatOpen={isChatOpen}
+				setIsChatOpen={setIsChatOpen}
+				messages={messages}
+				chatRef={chatRef}
+				newMessage={newMessage}
+				setNewMessage={setNewMessage}
+				onSendMessage={sendMessage}
+			/>
+		</>
 	);
 };
 

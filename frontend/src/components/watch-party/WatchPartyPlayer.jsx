@@ -12,6 +12,7 @@ import {
 	Film,
 	RefreshCw,
 	Server,
+	Lock,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Z } from "./zIndex";
@@ -34,9 +35,10 @@ const formatTime = (seconds) => {
 // this component only calls methods on the player it's handed and reflects
 // state it's given; it owns no sync logic of its own.
 const WatchPartyPlayer = ({
-	mediaType, // "movie" | "tv" | "youtube"
+	mediaType, // "movie" | "tv" | "youtube" | "custom"
 	title,
 	backdropPath,
+	isHost,
 	isPlaying,
 	currentTime,
 	isBuffering,
@@ -44,7 +46,10 @@ const WatchPartyPlayer = ({
 	// YouTube
 	youtubeContainerRef,
 	youtubePlayerRef,
-	onYoutubeSeek,
+	// Custom (self-hosted upload)
+	customVideoRef,
+	customVideoUrl,
+	onHostSeek,
 	// Movie/TV embed
 	showEmbeddedPlayer,
 	streamingUrl,
@@ -63,8 +68,14 @@ const WatchPartyPlayer = ({
 	isFullscreen,
 	onToggleFullscreen,
 	controlsVisible = true,
+	// Countdown / ready overlay (rendered on top of everything, incl. fullscreen)
+	countdownOverlay,
 }) => {
 	const isYoutube = mediaType === "youtube";
+	const isCustom = mediaType === "custom";
+	// Both get genuine hard sync (real seek/progress), unlike the TMDB/vidsrc
+	// embed which has no control API at all - see WatchPartySyncEngine.
+	const isHardSync = isYoutube || isCustom;
 	const [iframeLoaded, setIframeLoaded] = useState(false);
 	const [volume, setVolume] = useState(100);
 	const [isMuted, setIsMuted] = useState(false);
@@ -78,66 +89,92 @@ const WatchPartyPlayer = ({
 		setIframeLoaded(false);
 	}, [streamingUrl]);
 
-	// Poll the real YouTube player for smooth progress - the shared
-	// `currentTime` prop only updates on sync events (~every 2s / on
-	// play/pause/seek), too coarse for a smooth scrubber.
+	// Poll the real player (YouTube or the <video> element) for smooth
+	// progress - the shared `currentTime` prop only updates on sync events
+	// (~every 2s / on play/pause/seek), too coarse for a smooth scrubber.
 	useEffect(() => {
-		if (!isYoutube) return;
+		if (!isHardSync) return;
 		const tick = () => {
-			const player = youtubePlayerRef.current;
-			if (player?.getCurrentTime && !isScrubbing) {
-				setProgress({
-					time: player.getCurrentTime() || 0,
-					duration: player.getDuration() || 0,
-				});
+			if (isScrubbing) return;
+			if (isYoutube) {
+				const player = youtubePlayerRef.current;
+				if (player?.getCurrentTime) {
+					setProgress({
+						time: player.getCurrentTime() || 0,
+						duration: player.getDuration() || 0,
+					});
+				}
+			} else {
+				const video = customVideoRef?.current;
+				if (video) {
+					setProgress({ time: video.currentTime || 0, duration: video.duration || 0 });
+				}
 			}
 		};
 		tick();
 		const id = setInterval(tick, 250);
 		return () => clearInterval(id);
-	}, [isYoutube, youtubePlayerRef, isScrubbing]);
+	}, [isHardSync, isYoutube, youtubePlayerRef, customVideoRef, isScrubbing]);
 
 	// Movie/TV elapsed-time ticker: estimate from the shared currentTime/
 	// isPlaying props the same way the existing sync system already does,
-	// just rendered locally - no new sync mechanics.
+	// just rendered locally - no new sync mechanics. Only applies to the
+	// best-effort TMDB adapter; hard-sync media use the real polled progress.
 	const tickerAnchorRef = useRef({ time: currentTime, wallClock: Date.now() });
 	const [tickerNow, setTickerNow] = useState(Date.now());
 	useEffect(() => {
 		tickerAnchorRef.current = { time: currentTime, wallClock: Date.now() };
 	}, [currentTime, isPlaying]);
 	useEffect(() => {
-		if (isYoutube || !isPlaying) return;
+		if (isHardSync || !isPlaying) return;
 		const id = setInterval(() => setTickerNow(Date.now()), 1000);
 		return () => clearInterval(id);
-	}, [isYoutube, isPlaying]);
+	}, [isHardSync, isPlaying]);
 	const tickerSeconds = isPlaying
 		? tickerAnchorRef.current.time +
 		  (tickerNow - tickerAnchorRef.current.wallClock) / 1000
 		: currentTime;
 
+	// Volume is participant-local (unaffected by host gating) - applies to
+	// whichever hard-sync player is actually active.
 	const handleVolumeChange = (next) => {
 		setVolume(next);
-		const player = youtubePlayerRef?.current;
-		if (!player) return;
-		player.setVolume(next);
-		if (next === 0 && !isMuted) {
-			player.mute();
-			setIsMuted(true);
-		} else if (next > 0 && isMuted) {
-			player.unMute();
-			setIsMuted(false);
+		if (isYoutube) {
+			const player = youtubePlayerRef?.current;
+			if (!player) return;
+			player.setVolume(next);
+			if (next === 0 && !isMuted) {
+				player.mute();
+				setIsMuted(true);
+			} else if (next > 0 && isMuted) {
+				player.unMute();
+				setIsMuted(false);
+			}
+		} else if (isCustom) {
+			const video = customVideoRef?.current;
+			if (!video) return;
+			video.volume = next / 100;
+			video.muted = next === 0;
+			setIsMuted(next === 0);
 		}
 	};
 
 	const toggleMute = () => {
-		const player = youtubePlayerRef?.current;
-		if (!player) return;
-		if (isMuted) {
-			player.unMute();
-			setIsMuted(false);
-		} else {
-			player.mute();
-			setIsMuted(true);
+		if (isYoutube) {
+			const player = youtubePlayerRef?.current;
+			if (!player) return;
+			if (isMuted) {
+				player.unMute();
+				setIsMuted(false);
+			} else {
+				player.mute();
+				setIsMuted(true);
+			}
+		} else if (isCustom) {
+			const video = customVideoRef?.current;
+			if (!video) return;
+			video.muted = !isMuted;
+			setIsMuted(!isMuted);
 		}
 	};
 
@@ -149,8 +186,12 @@ const WatchPartyPlayer = ({
 		return ratio * progress.duration;
 	};
 
+	// Scrubbing changes shared playback state, so it's host-only - the server
+	// independently rejects a non-host's host_seek regardless of this guard,
+	// but there's no reason to let a participant drag the handle at all.
+	const canScrub = isHardSync && isHost;
 	const handleScrubStart = (e) => {
-		if (!isYoutube) return;
+		if (!canScrub) return;
 		setIsScrubbing(true);
 		setScrubTime(seekFromClientX(e.clientX));
 	};
@@ -161,8 +202,9 @@ const WatchPartyPlayer = ({
 	const handleScrubEnd = () => {
 		if (!isScrubbing) return;
 		setIsScrubbing(false);
-		youtubePlayerRef?.current?.seekTo(scrubTime, true);
-		onYoutubeSeek?.(scrubTime);
+		if (isYoutube) youtubePlayerRef?.current?.seekTo(scrubTime, true);
+		else if (isCustom && customVideoRef?.current) customVideoRef.current.currentTime = scrubTime;
+		onHostSeek?.(scrubTime);
 	};
 
 	const displayTime = isScrubbing ? scrubTime : progress.time;
@@ -173,6 +215,16 @@ const WatchPartyPlayer = ({
 				<div
 					ref={youtubeContainerRef}
 					className="w-full h-full min-h-[250px] md:min-h-[400px] overflow-hidden relative"
+				/>
+			);
+		}
+		if (isCustom) {
+			return (
+				<video
+					ref={customVideoRef}
+					src={customVideoUrl}
+					className="w-full h-full min-h-[250px] md:min-h-[400px] bg-black object-contain"
+					playsInline
 				/>
 			);
 		}
@@ -222,12 +274,19 @@ const WatchPartyPlayer = ({
 						Click the source picker below to choose a streaming source, or click
 						"Try Next" to automatically cycle through sources.
 					</p>
-					<button
-						onClick={tryNextSource}
-						className="btn-primary flex items-center gap-2 mx-auto text-sm md:text-base">
-						<RefreshCw className="w-4 h-4 md:w-5 md:h-5" />
-						Try First Source
-					</button>
+					{isHost ? (
+						<button
+							onClick={tryNextSource}
+							className="btn-primary flex items-center gap-2 mx-auto text-sm md:text-base">
+							<RefreshCw className="w-4 h-4 md:w-5 md:h-5" />
+							Try First Source
+						</button>
+					) : (
+						<p className="text-sm text-[#52525B] flex items-center justify-center gap-1.5">
+							<Lock className="w-3.5 h-3.5" />
+							Waiting for the host to select a source
+						</p>
+					)}
 				</div>
 			</div>
 		);
@@ -268,6 +327,8 @@ const WatchPartyPlayer = ({
 
 			{renderContent()}
 
+			{countdownOverlay}
+
 			{isYoutube && isBuffering && (
 				<div className="absolute inset-0 flex items-center justify-center pointer-events-none">
 					<Loader2 className="w-10 h-10 animate-spin text-[#7C3AED]" />
@@ -291,14 +352,17 @@ const WatchPartyPlayer = ({
 					"absolute bottom-0 left-0 right-0 px-3 md:px-4 py-2 md:py-3 bg-gradient-to-t from-black/85 to-transparent transition-opacity duration-300",
 					controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"
 				)}>
-				{isYoutube ? (
+				{isHardSync ? (
 					<div
 						ref={progressBarRef}
 						onPointerDown={handleScrubStart}
 						onPointerMove={handleScrubMove}
 						onPointerUp={handleScrubEnd}
 						onPointerLeave={() => isScrubbing && handleScrubEnd()}
-						className="relative h-1.5 mb-2 rounded-full bg-white/20 cursor-pointer group/bar">
+						className={cn(
+							"relative h-1.5 mb-2 rounded-full bg-white/20 group/bar",
+							canScrub ? "cursor-pointer" : "cursor-default"
+						)}>
 						<div
 							className="absolute inset-y-0 left-0 rounded-full bg-[#7C3AED]"
 							style={{
@@ -307,14 +371,16 @@ const WatchPartyPlayer = ({
 									: "0%",
 							}}
 						/>
-						<div
-							className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-white opacity-0 group-hover/bar:opacity-100 transition-opacity"
-							style={{
-								left: progress.duration
-									? `${Math.min(100, (displayTime / progress.duration) * 100)}%`
-									: "0%",
-							}}
-						/>
+						{canScrub && (
+							<div
+								className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-white opacity-0 group-hover/bar:opacity-100 transition-opacity"
+								style={{
+									left: progress.duration
+										? `${Math.min(100, (displayTime / progress.duration) * 100)}%`
+										: "0%",
+								}}
+							/>
+						)}
 					</div>
 				) : (
 					<div className="mb-2 text-xs text-[#A1A1AA]">{formatTime(tickerSeconds)} elapsed</div>
@@ -322,14 +388,22 @@ const WatchPartyPlayer = ({
 
 				<div className="flex items-center justify-between gap-2">
 					<div className="flex items-center gap-2">
-						<button
-							onClick={onTogglePlayback}
-							data-testid="player-toggle-playback-btn"
-							className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-all">
-							{isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-						</button>
+						{isHost ? (
+							<button
+								onClick={onTogglePlayback}
+								data-testid="player-toggle-playback-btn"
+								className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-all">
+								{isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+							</button>
+						) : (
+							<div
+								title="Only the host controls playback"
+								className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center text-[#52525B]">
+								<Lock className="w-4 h-4" />
+							</div>
+						)}
 
-						{isYoutube ? (
+						{isHardSync ? (
 							<>
 								<span className="text-xs text-[#A1A1AA] hidden sm:inline">
 									{formatTime(displayTime)} / {formatTime(progress.duration)}
@@ -354,7 +428,7 @@ const WatchPartyPlayer = ({
 									/>
 								</div>
 							</>
-						) : (
+						) : isHost ? (
 							<div className="relative">
 								<button
 									onClick={() => setShowSourcePicker(!showSourcePicker)}
@@ -381,6 +455,11 @@ const WatchPartyPlayer = ({
 										))}
 									</div>
 								)}
+							</div>
+						) : (
+							<div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-white/5 text-xs text-[#52525B]">
+								<Lock className="w-3.5 h-3.5" />
+								<span className="hidden sm:inline">Host Controls Playback</span>
 							</div>
 						)}
 					</div>

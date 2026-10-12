@@ -28,6 +28,7 @@ const WatchPartyRoom = ({
 	onBack,
 	headerActions,
 	isCreator,
+	isHost,
 	mediaType,
 	title,
 	backdropPath,
@@ -37,7 +38,10 @@ const WatchPartyRoom = ({
 	onTogglePlayback,
 	youtubeContainerRef,
 	youtubePlayerRef,
-	onYoutubeSeek,
+	customVideoRef,
+	customVideoUrl,
+	onHostSeek,
+	countdownOverlay,
 	showEmbeddedPlayer,
 	streamingUrl,
 	selectedSource,
@@ -159,13 +163,17 @@ const WatchPartyRoom = ({
 							mediaType={mediaType}
 							title={title}
 							backdropPath={backdropPath}
+							isHost={isHost}
 							isPlaying={isPlaying}
 							currentTime={currentTime}
 							isBuffering={isBuffering}
 							onTogglePlayback={onTogglePlayback}
 							youtubeContainerRef={youtubeContainerRef}
 							youtubePlayerRef={youtubePlayerRef}
-							onYoutubeSeek={onYoutubeSeek}
+							customVideoRef={customVideoRef}
+							customVideoUrl={customVideoUrl}
+							onHostSeek={onHostSeek}
+							countdownOverlay={countdownOverlay}
 							showEmbeddedPlayer={showEmbeddedPlayer}
 							streamingUrl={streamingUrl}
 							selectedSource={selectedSource}
